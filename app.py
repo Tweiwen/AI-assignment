@@ -89,7 +89,7 @@ with tab1:
     with col10:
         device = st.selectbox("Device Used", ["TV", "Mobile", "Desktop", "Tablet"])
     with col11:
-        payment_method = st.selectbox("Payment Method", ["Credit/Debit Card", "PayPal", "Gift Card", "Crypto"])
+        payment_method = st.selectbox("Payment Method", ["Credit Card", "PayPal", "Gift Card", "Crypto"])
     with col12:
         favorite_genre = st.selectbox("Favorite Genre", ["Action", "Comedy", "Drama", "Horror", "Sci-Fi", "Documentary"])
 
