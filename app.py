@@ -1,8 +1,11 @@
-import streamlit as st
+import os
+import json
+import joblib
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import streamlit as st
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -13,22 +16,41 @@ from sklearn.svm import SVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-# Page configuration
+# ---------------------------------------------------------
+# STREAMLIT PAGE CONFIGURATION
+# ---------------------------------------------------------
 st.set_page_config(
     page_title="Netflix Churn Predictor",
     page_icon="🎬",
     layout="wide"
 )
 
-# Header Section
 st.title("🎬 Netflix Customer Churn Prediction System")
-st.markdown("Compare machine learning models and predict customer churn risk.")
+st.markdown("Interactively assess customer churn risk using machine learning algorithms.")
 st.divider()
 
-# Cache model training and comparison
+# ---------------------------------------------------------
+# CACHED TRAINING & MODEL SAVING LOGIC
+# ---------------------------------------------------------
 @st.cache_resource
-def train_and_evaluate_models():
-    df = pd.read_csv('netflix_customer_churn.csv')
+def load_or_train_models():
+    # File path resolution across directory layouts
+    possible_paths = [
+        '03_Dataset/netflix_customer_churn.csv',
+        'netflix_customer_churn.csv'
+    ]
+    
+    dataset_path = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            dataset_path = path
+            break
+
+    if dataset_path is None:
+        st.error("❌ Error: Dataset file 'netflix_customer_churn.csv' missing.")
+        st.stop()
+
+    df = pd.read_csv(dataset_path)
     X = df.drop(columns=['customer_id', 'churned'])
     y = df['churned']
 
@@ -72,30 +94,33 @@ def train_and_evaluate_models():
         })
         trained_pipelines[name] = pipeline
 
+    # Save best model to folder 04_Trained_Model
+    os.makedirs('04_Trained_Model', exist_ok=True)
+    joblib.dump(trained_pipelines['Random Forest'], '04_Trained_Model/netflix_churn_pipeline.pkl')
+
     results_df = pd.DataFrame(results)
     return trained_pipelines, results_df
 
-# Train / load model and benchmarks
-with st.spinner("Training models & calculating performance comparison..."):
-    trained_pipelines, comparison_df = train_and_evaluate_models()
+with st.spinner("Initializing system & loading ML pipeline..."):
+    trained_pipelines, comparison_df = load_or_train_models()
     best_pipeline = trained_pipelines['Random Forest']
 
-# Session State for prediction tracking
+# State management
 if 'has_predicted' not in st.session_state:
     st.session_state.has_predicted = False
 
-# Three Homepage Tabs
+# ---------------------------------------------------------
+# THREE HOMEPAGE TABS
+# ---------------------------------------------------------
 tab1, tab2, tab3 = st.tabs([
     "📋 Customer Details Input", 
     "📊 Prediction Results", 
     "📈 Model Comparison (KNN vs SVM vs RF)"
 ])
 
-# ---------------------------------------------------------
 # TAB 1: INPUT FORM
-# ---------------------------------------------------------
 with tab1:
-    st.subheader("Enter Customer Profile Features")
+    st.subheader("Customer Profile & Subscription Parameters")
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -151,13 +176,11 @@ with tab1:
             st.session_state.probabilities = best_pipeline.predict_proba(input_df)[0]
             st.session_state.has_predicted = True
             st.session_state.last_input = input_df
-            st.success("Prediction generated using **Random Forest**! Open the **'📊 Prediction Results'** tab above.")
+            st.success("✅ Prediction complete! Open the **'📊 Prediction Results'** tab above.")
 
-# ---------------------------------------------------------
 # TAB 2: PREDICTION RESULTS
-# ---------------------------------------------------------
 with tab2:
-    st.subheader("Model Output Analysis (Random Forest)")
+    st.subheader("Model Output & Risk Assessment")
 
     if st.session_state.has_predicted:
         prediction = st.session_state.prediction
@@ -171,37 +194,37 @@ with tab2:
                 st.error("⚠️ **Status: High Risk of Churn!**")
                 st.metric(label="Churn Probability", value=f"{probabilities[1]*100:.2f}%")
             else:
-                st.success("✅ **Status: Customer Retained (Low Churn Risk)**")
+                st.success("✅ **Status: Customer Retained (Low Risk)**")
                 st.metric(label="Retention Probability", value=f"{probabilities[0]*100:.2f}%")
 
             st.divider()
-            st.markdown("### Submitted Inputs Summary")
+            st.markdown("### Submitted Profile Summary")
             st.dataframe(st.session_state.last_input.T, use_container_width=True)
 
         with res_col2:
-            st.markdown("### Probability Breakdown")
+            st.markdown("### Outcome Probability Distribution")
             prob_df = pd.DataFrame({
                 'Outcome': ['Retained', 'Churned'],
                 'Probability (%)': [probabilities[0]*100, probabilities[1]*100]
             })
             st.bar_chart(prob_df.set_index('Outcome'))
     else:
-        st.info("👈 Please enter customer details in the **'📋 Customer Details Input'** tab and click **'Predict Churn Status'** first.")
+        st.info("👈 Enter profile details in the **'📋 Customer Details Input'** tab and click **'Predict Churn Status'** first.")
 
-# ---------------------------------------------------------
-# TAB 3: MODEL COMPARISON (KNN vs SVM vs RANDOM FOREST)
-# ---------------------------------------------------------
+# TAB 3: MODEL COMPARISON
 with tab3:
-    st.subheader("Model Performance Comparison")
-    st.markdown("Evaluation metrics calculated on the 20% hold-out test dataset.")
+    st.subheader("Model Evaluation & Algorithm Comparison")
+    st.markdown("Benchmarking results tested on 2,000 hold-out sample records (20% test split).")
 
-    st.dataframe(comparison_df.style.highlight_max(axis=0, subset=['Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)']), use_container_width=True)
+    st.dataframe(
+        comparison_df.style.highlight_max(axis=0, subset=['Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)']),
+        use_container_width=True
+    )
 
     st.divider()
-    st.markdown("### Accuracy Comparison Visual")
-    
-    fig, ax = plt.subplots(figsize=(8, 4))
-    sns.barplot(data=comparison_df, x='Model', y='Accuracy (%)', palette='Set2', ax=ax)
+    st.markdown("### Accuracy Comparison Chart")
+    fig, ax = plt.subplots(figsize=(8, 3.5))
+    sns.barplot(data=comparison_df, x='Model', y='Accuracy (%)', palette='Blues_r', ax=ax)
     ax.set_ylim(70, 100)
     for p in ax.patches:
         ax.annotate(f"{p.get_height():.2f}%", (p.get_x() + p.get_width() / 2., p.get_height()),
