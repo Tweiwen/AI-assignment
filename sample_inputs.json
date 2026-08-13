@@ -1,0 +1,42 @@
+[
+  {
+    "sample_id": 1,
+    "description": "Standard Customer - Low Churn Risk Case",
+    "input_data": {
+      "age": 67,
+      "gender": "Male",
+      "subscription_type": "Standard",
+      "watch_hours": 26.05,
+      "last_login_days": 21,
+      "region": "Europe",
+      "device": "TV",
+      "monthly_fee": 13.99,
+      "payment_method": "PayPal",
+      "number_of_profiles": 4,
+      "avg_watch_time_per_day": 1.18,
+      "favorite_genre": "Drama"
+    },
+    "expected_output": 0,
+    "expected_label": "Retained"
+  },
+  {
+    "sample_id": 2,
+    "description": "Inactive Customer - High Churn Risk Case",
+    "input_data": {
+      "age": 51,
+      "gender": "Other",
+      "subscription_type": "Basic",
+      "watch_hours": 14.73,
+      "last_login_days": 29,
+      "region": "Africa",
+      "device": "TV",
+      "monthly_fee": 8.99,
+      "payment_method": "Gift Card",
+      "number_of_profiles": 1,
+      "avg_watch_time_per_day": 0.49,
+      "favorite_genre": "Action"
+    },
+    "expected_output": 1,
+    "expected_label": "Churned"
+  }
+]
