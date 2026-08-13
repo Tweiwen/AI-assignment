@@ -93,7 +93,7 @@ st.divider()
 # Center Predict Button
 center_btn_col1, center_btn_col2, center_btn_col3 = st.columns([2, 1, 2])
 with center_btn_col2:
-    predict_clicked = st.button("🔍 Predict Churn Status", use_container_width=True, type="primary")
+    predict_clicked = st.button("Predict", use_container_width=True, type="primary")
 
 # ---------------------------------------------------------
 # PREDICTION ANALYSIS RESULTS
