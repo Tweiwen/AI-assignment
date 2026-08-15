@@ -19,17 +19,14 @@ PRICES = {
     "Premium": 17.99
 }
 
-# Initialize session state for subscription type and fee
-if "subscription_type" not in st.session_state:
-    st.session_state.subscription_type = "Basic"
+# 1. Initialize fee_display directly in session_state
+if "fee_display" not in st.session_state:
+    st.session_state.fee_display = PRICES["Basic"]
 
-if "monthly_fee" not in st.session_state:
-    st.session_state.monthly_fee = PRICES["Basic"]
-
-# Callback function to automatically update monthly_fee
+# 2. Callback function updating fee_display directly when dropdown changes
 def update_fee():
     selected_plan = st.session_state.subscription_type
-    st.session_state.monthly_fee = PRICES[selected_plan]
+    st.session_state.fee_display = PRICES[selected_plan]
 
 
 # ---------------------------------------------------------
@@ -67,21 +64,20 @@ if page == "Subscription Form":
     col4, col5 = st.columns(2)
 
     with col4:
-        # Subscription Type Dropdown (Outside form -> on_change works!)
+        # Subscription Type Selectbox
         st.selectbox(
             label="Subscription Type",
             options=list(PRICES.keys()),
             key="subscription_type",
             on_change=update_fee,
-            help="Selecting 'Basic' automatically sets the monthly fee to $8.99."
+            help="Selecting a plan automatically sets the monthly fee."
         )
         
-        # Read-only Fee Field synced to selected plan
+        # Monthly Fee display linked directly to st.session_state.fee_display
         st.number_input(
             label="Monthly Fee ($)",
-            value=st.session_state.monthly_fee,
-            format="%.2f",
             key="fee_display",
+            format="%.2f",
             disabled=True,
             help="Price automatically set based on subscription type."
         )
@@ -92,10 +88,8 @@ if page == "Subscription Form":
 
     st.divider()
     
-    # Action Button
     submit_button = st.button(label="Submit Subscription", type="primary")
 
-    # Display Results on Click
     if submit_button:
         st.success("Subscription entry recorded successfully!")
         
@@ -108,7 +102,7 @@ if page == "Subscription Form":
             "Payment Method": payment_method,
             "Number of Profiles": number_of_profiles,
             "Subscription Type": st.session_state.subscription_type,
-            "Monthly Fee": f"${st.session_state.monthly_fee:.2f}",
+            "Monthly Fee": f"${st.session_state.fee_display:.2f}",
             "Favorite Genre": favorite_genre,
             "Avg Daily Watch Time (hrs)": avg_watch_time
         }
