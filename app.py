@@ -1,205 +1,145 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import numpy as np
+import joblib
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# ---------------------------------------------------------
-# 1. Page Configuration
-# ---------------------------------------------------------
-st.set_page_config(
-    page_title="Netflix Subscription & Analytics Portal",
-    page_icon="🎬",
-    layout="wide"
-)
+st.set_page_config(page_title="Netflix Churn Predictor", layout="wide")
 
-# ---------------------------------------------------------
-# 2. Standard US Price Mapping & Session State Setup
-# ---------------------------------------------------------
-PRICES = {
-    "Basic": 9.99,
-    "Standard": 15.49,
-    "Premium": 22.99
-}
+# Load Preprocessor and Models
+@st.cache_resource
+def load_artifacts():
+    preprocessor = joblib.load('preprocessing_pipeline.pkl')
+    rf_model = joblib.load('models/model_random.pkl')
+    svm_model = joblib.load('models/model_svm.pkl')
+    knn_model = joblib.load('models/model_knn.pkl')
+    return preprocessor, {"Random Forest": rf_model, "SVM": svm_model, "KNN": knn_model}
 
-# Initialize fee_display directly in session_state with US Basic Price ($9.99)
-if "fee_display" not in st.session_state:
-    st.session_state.fee_display = PRICES["Basic"]
+try:
+    preprocessor, models = load_artifacts()
+except Exception as e:
+    st.error("Error loading model files. Please run `train_models.py` first.")
+    st.stop()
 
-# Callback function updating fee_display directly when dropdown changes
-def update_fee():
-    selected_plan = st.session_state.subscription_type
-    st.session_state.fee_display = PRICES[selected_plan]
-
-
-# Load Dataset Helper
-@st.cache_data
-def load_data():
-    try:
-        return pd.read_csv("netflix_customer_churn.csv")
-    except Exception:
-        return None
-
-df = load_data()
-
-# ---------------------------------------------------------
-# 3. Sidebar Navigation
-# ---------------------------------------------------------
+# Sidebar Navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to:", [
-    "Subscription Form", 
-    "Subscription Type Analysis", 
-    "View Dataset Overview"
-])
+page = st.sidebar.radio("Select Module:", ["Dashboard", "Single Prediction", "Batch Prediction", "Model Performance"])
 
-
-# ---------------------------------------------------------
-# PAGE 1: Subscription Form
-# ---------------------------------------------------------
-if page == "Subscription Form":
-    st.title("🎬 Netflix Customer Registration")
-    st.write("Register a customer account or update plan details below. The fee defaults automatically to the plan's exact US price.")
+# MODULE 1: DASHBOARD
+if page == "Dashboard":
+    st.title("🎬 Netflix Customer Churn Analytics")
+    st.markdown("Overview of customer dataset distributions and key metrics.")
+    
+    df = pd.read_csv('../03_Dataset/netflix_customer_churn.csv')
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Total Customers", len(df))
+    col2.metric("Churn Rate", f"{(df['churned'].mean() * 100):.1f}%")
+    col3.metric("Avg Watch Hours", f"{df['watch_hours'].mean():.1f} hrs")
+    col4.metric("Avg Monthly Fee", f"${df['monthly_fee'].mean():.2f}")
     
     st.divider()
-
-    st.subheader("1. Customer Profile")
-    col1, col2, col3 = st.columns(3)
+    col_left, col_right = st.columns(2)
     
-    with col1:
-        age = st.number_input("Age", min_value=12, max_value=100, value=30)
-        gender = st.selectbox("Gender", options=["Male", "Female", "Other"])
-    
-    with col2:
-        region = st.selectbox("Region", options=["North America", "Europe", "Asia", "Africa", "Oceania", "South America"])
-        device = st.selectbox("Primary Device", options=["TV", "Mobile", "Desktop", "Tablet"])
-
-    with col3:
-        payment_method = st.selectbox(
-            "Payment Method", 
-            options=["Credit Card", "Debit Card", "PayPal", "Gift Card", "Crypto"]
-        )
-        number_of_profiles = st.number_input("Number of Profiles", min_value=1, max_value=5, value=1)
-
-    st.subheader("2. Subscription & Preferences")
-    col4, col5 = st.columns(2)
-
-    with col4:
-        # Subscription Type Selectbox (Defaults to Basic)
-        st.selectbox(
-            label="Subscription Type",
-            options=list(PRICES.keys()),
-            key="subscription_type",
-            on_change=update_fee,
-            help="Selecting a plan automatically updates the US monthly fee field."
-        )
+    with col_left:
+        st.subheader("Churn Distribution by Subscription Type")
+        fig, ax = plt.subplots()
+        sns.countplot(data=df, x='subscription_type', hue='churned', palette='Set2', ax=ax)
+        st.pyplot(fig)
         
-        # Read-only Fee Field synced to selected plan
-        st.number_input(
-            label="Monthly Fee ($ USD)",
-            key="fee_display",
-            format="%.2f",
-            disabled=True,
-            help="US Price automatically set based on subscription type."
-        )
+    with col_right:
+        st.subheader("Watch Time vs Last Login Days")
+        fig2, ax2 = plt.subplots()
+        sns.scatterplot(data=df, x='last_login_days', y='watch_hours', hue='churned', alpha=0.6, ax=ax2)
+        st.pyplot(fig2)
 
-    with col5:
-        favorite_genre = st.selectbox("Favorite Genre", options=["Action", "Sci-Fi", "Drama", "Horror", "Comedy", "Documentary"])
-        avg_watch_time = st.number_input("Avg Watch Time Per Day (Hours)", min_value=0.0, max_value=24.0, value=1.5, step=0.1)
-
-    st.divider()
+# MODULE 2: SINGLE PREDICTION
+elif page == "Single Prediction":
+    st.title("👤 Customer Churn Risk Evaluator")
+    st.markdown("Enter customer details below to predict their likelihood of churning.")
     
-    submit_button = st.button(label="Submit Subscription", type="primary")
-
-    if submit_button:
-        st.success("Subscription entry recorded successfully!")
+    selected_model_name = st.selectbox("Select Classification Model:", list(models.keys()))
+    selected_model = models[selected_model_name]
+    
+    with st.form("prediction_form"):
+        col1, col2, col3 = st.columns(3)
         
-        st.subheader("Submitted Record Summary")
-        submitted_data = {
-            "Age": age,
-            "Gender": gender,
-            "Region": region,
-            "Device": device,
-            "Payment Method": payment_method,
-            "Number of Profiles": number_of_profiles,
-            "Subscription Type": st.session_state.subscription_type,
-            "Monthly Fee": f"${st.session_state.fee_display:.2f} USD",
-            "Favorite Genre": favorite_genre,
-            "Avg Daily Watch Time (hrs)": avg_watch_time
-        }
-        st.json(submitted_data)
-
-
-# ---------------------------------------------------------
-# PAGE 2: Subscription Type Analysis
-# ---------------------------------------------------------
-elif page == "Subscription Type Analysis":
-    st.title("📈 Subscription Type Analysis")
-    
-    if df is not None:
-        # Group data by subscription type
-        sub_stats = df.groupby("subscription_type").agg(
-            Total_Customers=("customer_id", "count"),
-            Dataset_Avg_Fee=("monthly_fee", "mean"),
-            Churn_Rate_Pct=("churned", lambda x: (x.mean() * 100)),
-            Avg_Watch_Hours=("watch_hours", "mean"),
-            Avg_Daily_Watch_Time=("avg_watch_time_per_day", "mean")
-        ).reset_index()
-
-        # Add US Price Column for comparison
-        sub_stats["US_Price_USD"] = sub_stats["subscription_type"].map(PRICES)
-
-        st.subheader("Summary Table by Subscription Tier")
-        st.dataframe(sub_stats.style.format({
-            "US_Price_USD": "${:.2f}",
-            "Dataset_Avg_Fee": "${:.2f}",
-            "Churn_Rate_Pct": "{:.1f}%",
-            "Avg_Watch_Hours": "{:.2f} hrs",
-            "Avg_Daily_Watch_Time": "{:.2f} hrs"
-        }), use_container_width=True)
-
+        with col1:
+            age = st.number_input("Age", min_value=18, max_value=100, value=30)
+            gender = st.selectbox("Gender", ["Male", "Female", "Other"])
+            sub_type = st.selectbox("Subscription Type", ["Basic", "Standard", "Premium"])
+            region = st.selectbox("Region", ["Africa", "Asia", "Europe", "North America", "Oceania", "South America"])
+            
+        with col2:
+            watch_hours = st.number_input("Watch Hours (Total)", min_value=0.0, value=15.0)
+            avg_daily_watch = st.number_input("Avg Watch Time / Day (hrs)", min_value=0.0, value=1.5)
+            last_login = st.number_input("Last Login Days Ago", min_value=0, max_value=365, value=5)
+            profiles = st.number_input("Number of Profiles", min_value=1, max_value=5, value=2)
+            
+        with col3:
+            device = st.selectbox("Primary Device", ["Desktop", "Laptop", "Mobile", "Tablet", "TV"])
+            monthly_fee = st.number_input("Monthly Fee ($)", min_value=0.0, value=11.99)
+            payment = st.selectbox("Payment Method", ["Credit Card", "Crypto", "Debit Card", "Gift Card", "PayPal"])
+            genre = st.selectbox("Favorite Genre", ["Action", "Comedy", "Documentary", "Drama", "Horror", "Romance", "Sci-Fi"])
+            
+        submit_btn = st.form_submit_button("Predict Churn Risk")
+        
+    if submit_btn:
+        input_data = pd.DataFrame([{
+            'age': age, 'gender': gender, 'subscription_type': sub_type, 'region': region,
+            'watch_hours': watch_hours, 'avg_watch_time_per_day': avg_daily_watch,
+            'last_login_days': last_login, 'number_of_profiles': profiles,
+            'device': device, 'monthly_fee': monthly_fee, 'payment_method': payment,
+            'favorite_genre': genre
+        }])
+        
+        # Preprocess & Predict
+        input_prep = preprocessor.transform(input_data)
+        prediction = selected_model.predict(input_prep)[0]
+        proba = selected_model.predict_proba(input_prep)[0][1] * 100
+        
         st.divider()
+        if prediction == 1:
+            st.error(f"⚠️ **High Churn Risk!** Confidence: **{proba:.2f}%**")
+            st.warning("Recommendation: Offer a promotional discount or personalized content suggestions.")
+        else:
+            st.success(f"✅ **Low Churn Risk (Retained).** Retention Likelihood: **{(100 - proba):.2f}%**")
 
-        col_a, col_b = st.columns(2)
-
-        with col_a:
-            st.subheader("Churn Rate by Subscription Type")
-            fig_churn = px.bar(
-                sub_stats, 
-                x="subscription_type", 
-                y="Churn_Rate_Pct", 
-                text_auto=".1f",
-                labels={"subscription_type": "Subscription Plan", "Churn_Rate_Pct": "Churn Rate (%)"},
-                color="subscription_type"
-            )
-            st.plotly_chart(fig_churn, use_container_width=True)
-
-        with col_b:
-            st.subheader("Customer Distribution by Plan")
-            fig_pie = px.pie(
-                sub_stats, 
-                names="subscription_type", 
-                values="Total_Customers",
-                color="subscription_type"
-            )
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-    else:
-        st.warning("Please make sure `netflix_customer_churn.csv` is uploaded in your repository.")
-
-
-# ---------------------------------------------------------
-# PAGE 3: View Dataset Overview
-# ---------------------------------------------------------
-elif page == "View Dataset Overview":
-    st.title("📊 Dataset Metrics")
+# MODULE 3: BATCH PREDICTION
+elif page == "Batch Prediction":
+    st.title("📁 Batch Customer Prediction")
+    uploaded_file = st.file_uploader("Upload CSV file containing customer data", type=["csv"])
     
-    if df is not None:
-        st.write("Overview of `netflix_customer_churn.csv`:")
+    if uploaded_file is not None:
+        batch_df = pd.read_csv(uploaded_file)
+        st.write("Uploaded Preview:", batch_df.head(3))
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total Records", len(df))
-        c2.metric("Basic US Standard Price", f"${PRICES['Basic']:.2f}")
-        c3.metric("Overall Churn Rate", f"{(df['churned'].mean() * 100):.1f}%")
+        model_choice = st.selectbox("Choose Model for Batch Processing:", list(models.keys()))
+        
+        if st.button("Run Batch Predictions"):
+            try:
+                X_batch = batch_df.drop(columns=['customer_id', 'churned'], errors='ignore')
+                processed_batch = preprocessor.transform(X_batch)
+                preds = models[model_choice].predict(processed_batch)
+                
+                batch_df['Predicted_Churn'] = preds
+                st.success("Predictions complete!")
+                st.dataframe(batch_df.head(10))
+                
+                # Download button
+                csv_out = batch_df.to_csv(index=False).encode('utf-8')
+                st.download_button("Download Prediction Results CSV", csv_out, "churn_predictions.csv", "text/csv")
+            except Exception as err:
+                st.error(f"Error during processing: {err}")
 
-        st.subheader("Sample Rows")
-        st.dataframe(df.head(15))
-    else:
-        st.warning("`netflix_customer_churn.csv` not found.")
+# MODULE 4: MODEL PERFORMANCE
+elif page == "Model Performance":
+    st.title("📊 Model Comparison & Evaluation")
+    st.markdown("Comparison of evaluation metrics across group members' implementations.")
+    
+    try:
+        metrics_df = pd.read_csv('model_comparison_results.csv')
+        st.table(metrics_df.style.highlight_max(axis=0, subset=['Accuracy', 'Precision', 'Recall', 'F1 Score'], color='lightgreen'))
+    except FileNotFoundError:
+        st.warning("Metrics file not found. Ensure `train_models.py` has been executed.")
