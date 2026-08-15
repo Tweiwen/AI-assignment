@@ -1,232 +1,144 @@
-import os
-import json
-import joblib
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import streamlit as st
-
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+import pandas as pd
 
 # ---------------------------------------------------------
-# STREAMLIT PAGE CONFIGURATION
+# 1. Page Configuration
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="Netflix Churn Predictor",
+    page_title="Netflix Subscription & Churn Portal",
     page_icon="🎬",
     layout="wide"
 )
 
-st.title("🎬 Netflix Customer Churn Prediction System")
-st.markdown("Interactively assess customer churn risk using machine learning algorithms.")
-st.divider()
+# ---------------------------------------------------------
+# 2. Price Mapping & Session State Setup
+# ---------------------------------------------------------
+PRICES = {
+    "Basic": 8.99,
+    "Standard": 13.99,
+    "Premium": 17.99
+}
+
+# Default initial state to Basic ($8.99)
+if "subscription_type" not in st.session_state:
+    st.session_state.subscription_type = "Basic"
+
+if "monthly_fee" not in st.session_state:
+    st.session_state.monthly_fee = PRICES["Basic"]
+
+# Callback function to automatically update monthly_fee
+def update_fee():
+    selected_plan = st.session_state.subscription_type
+    st.session_state.monthly_fee = PRICES[selected_plan]
+
 
 # ---------------------------------------------------------
-# CACHED TRAINING & MODEL SAVING LOGIC
+# 3. Sidebar Navigation
 # ---------------------------------------------------------
-@st.cache_resource
-def load_or_train_models():
-    # File path resolution across directory layouts
-    possible_paths = [
-        '03_Dataset/netflix_customer_churn.csv',
-        'netflix_customer_churn.csv'
-    ]
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Go to:", ["Subscription Form", "View Dataset Metrics"])
+
+
+# ---------------------------------------------------------
+# PAGE 1: Subscription Form
+# ---------------------------------------------------------
+if page == "Subscription Form":
+    st.title("🎬 Netflix Customer Subscription Interface")
+    st.write("Register a customer account or update plan details below. The fee defaults automatically to the plan's exact price.")
     
-    dataset_path = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            dataset_path = path
-            break
-
-    if dataset_path is None:
-        st.error("❌ Error: Dataset file 'netflix_customer_churn.csv' missing.")
-        st.stop()
-
-    df = pd.read_csv(dataset_path)
-    X = df.drop(columns=['customer_id', 'churned'])
-    y = df['churned']
-
-    numeric_features = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
-    categorical_features = X.select_dtypes(include=['object']).columns.tolist()
-
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', StandardScaler(), numeric_features),
-            ('cat', OneHotEncoder(drop='first', handle_unknown='ignore'), categorical_features)
-        ]
-    )
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.20, random_state=42, stratify=y
-    )
-
-    models = {
-        'K-Nearest Neighbors (KNN)': KNeighborsClassifier(n_neighbors=5),
-        'Support Vector Machine (SVM)': SVC(kernel='rbf', C=1.0, probability=True, random_state=42),
-        'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42)
-    }
-
-    results = []
-    trained_pipelines = {}
-
-    for name, model in models.items():
-        pipeline = Pipeline(steps=[
-            ('preprocessor', preprocessor),
-            ('classifier', model)
-        ])
-        pipeline.fit(X_train, y_train)
-        y_pred = pipeline.predict(X_test)
-
-        results.append({
-            'Model': name,
-            'Accuracy (%)': round(accuracy_score(y_test, y_pred) * 100, 2),
-            'Precision (%)': round(precision_score(y_test, y_pred) * 100, 2),
-            'Recall (%)': round(recall_score(y_test, y_pred) * 100, 2),
-            'F1-Score (%)': round(f1_score(y_test, y_pred) * 100, 2)
-        })
-        trained_pipelines[name] = pipeline
-
-    # Save best model to folder 04_Trained_Model
-    os.makedirs('04_Trained_Model', exist_ok=True)
-    joblib.dump(trained_pipelines['Random Forest'], '04_Trained_Model/netflix_churn_pipeline.pkl')
-
-    results_df = pd.DataFrame(results)
-    return trained_pipelines, results_df
-
-with st.spinner("Initializing system & loading ML pipeline..."):
-    trained_pipelines, comparison_df = load_or_train_models()
-    best_pipeline = trained_pipelines['Random Forest']
-
-# State management
-if 'has_predicted' not in st.session_state:
-    st.session_state.has_predicted = False
-
-# ---------------------------------------------------------
-# THREE HOMEPAGE TABS
-# ---------------------------------------------------------
-tab1, tab2, tab3 = st.tabs([
-    "📋 Customer Details Input", 
-    "📊 Prediction Results", 
-    "📈 Model Comparison (KNN vs SVM vs RF)"
-])
-
-# TAB 1: INPUT FORM
-with tab1:
-    st.subheader("Customer Profile & Subscription Parameters")
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        age = st.number_input("Age", min_value=18, max_value=100, value=35)
-    with col2:
-        gender = st.selectbox("Gender", ["Male", "Female", "Other"])
-    with col3:
-        subscription_type = st.selectbox("Subscription Type", ["Basic", "Standard", "Premium"])
-    with col4:
-        monthly_fee = st.number_input("Monthly Fee ($)", min_value=5.0, max_value=30.0, value=13.99)
-
-    col5, col6, col7, col8 = st.columns(4)
-    with col5:
-        watch_hours = st.number_input("Total Watch Hours", min_value=0.0, max_value=500.0, value=25.0)
-    with col6:
-        avg_watch_time_per_day = st.number_input("Avg Daily Watch Time (Hrs)", min_value=0.0, max_value=24.0, value=1.5)
-    with col7:
-        last_login_days = st.slider("Days Since Last Login", min_value=0, max_value=60, value=10)
-    with col8:
-        number_of_profiles = st.slider("Number of Profiles", min_value=1, max_value=5, value=2)
-
-    col9, col10, col11, col12 = st.columns(4)
-    with col9:
-        region = st.selectbox("Region", ["Africa", "Asia", "Europe", "North America", "Oceania", "South America"])
-    with col10:
-        device = st.selectbox("Device Used", ["TV", "Mobile", "Desktop", "Tablet"])
-    with col11:
-        payment_method = st.selectbox("Payment Method", ["Credit Card", "PayPal", "Gift Card", "Crypto"])
-    with col12:
-        favorite_genre = st.selectbox("Favorite Genre", ["Action", "Comedy", "Drama", "Horror", "Sci-Fi", "Documentary"])
-
     st.divider()
 
-    btn_col1, btn_col2, btn_col3 = st.columns([2, 1, 2])
-    with btn_col2:
-        if st.button("🔍 Predict Churn Status", use_container_width=True, type="primary"):
-            input_df = pd.DataFrame([{
-                'age': age,
-                'gender': gender,
-                'subscription_type': subscription_type,
-                'watch_hours': watch_hours,
-                'last_login_days': last_login_days,
-                'region': region,
-                'device': device,
-                'monthly_fee': monthly_fee,
-                'payment_method': payment_method,
-                'number_of_profiles': number_of_profiles,
-                'avg_watch_time_per_day': avg_watch_time_per_day,
-                'favorite_genre': favorite_genre
-            }])
+    with st.form(key="customer_subscription_form"):
+        st.subheader("1. Customer Profile")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            age = st.number_input("Age", min_value=12, max_value=100, value=30)
+            gender = st.selectbox("Gender", options=["Male", "Female", "Other"])
+        
+        with col2:
+            region = st.selectbox("Region", options=["Africa", "Asia", "Europe", "North America", "Oceania", "South America"])
+            device = st.selectbox("Primary Device", options=["TV", "Mobile", "Desktop", "Tablet"])
 
-            st.session_state.prediction = best_pipeline.predict(input_df)[0]
-            st.session_state.probabilities = best_pipeline.predict_proba(input_df)[0]
-            st.session_state.has_predicted = True
-            st.session_state.last_input = input_df
-            st.success("✅ Prediction complete! Open the **'📊 Prediction Results'** tab above.")
+        with col3:
+            payment_method = st.selectbox("Payment Method", options=["Gift Card", "Crypto", "Credit Card", "PayPal"])
+            number_of_profiles = st.number_input("Number of Profiles", min_value=1, max_value=5, value=1)
 
-# TAB 2: PREDICTION RESULTS
-with tab2:
-    st.subheader("Model Output & Risk Assessment")
+        st.subheader("2. Subscription & Preferences")
+        col4, col5 = st.columns(2)
 
-    if st.session_state.has_predicted:
-        prediction = st.session_state.prediction
-        probabilities = st.session_state.probabilities
+        with col4:
+            # Subscription Type Dropdown (Defaults to Basic)
+            st.selectbox(
+                label="Subscription Type",
+                options=list(PRICES.keys()),
+                key="subscription_type",
+                on_change=update_fee,
+                help="Selecting 'Basic' automatically sets the monthly fee to $8.99."
+            )
+            
+            # Read-only Fee Field synced to selected plan
+            st.number_input(
+                label="Monthly Fee ($)",
+                value=st.session_state.monthly_fee,
+                format="%.2f",
+                key="fee_display",
+                disabled=True,
+                help="Price automatically set based on subscription type."
+            )
 
-        res_col1, res_col2 = st.columns([1, 1])
+        with col5:
+            favorite_genre = st.selectbox("Favorite Genre", options=["Action", "Sci-Fi", "Drama", "Horror", "Comedy", "Documentary"])
+            avg_watch_time = st.number_input("Avg Watch Time Per Day (Hours)", min_value=0.0, max_value=24.0, value=1.5, step=0.1)
 
-        with res_col1:
-            st.markdown("### Risk Status")
-            if prediction == 1:
-                st.error("⚠️ **Status: High Risk of Churn!**")
-                st.metric(label="Churn Probability", value=f"{probabilities[1]*100:.2f}%")
-            else:
-                st.success("✅ **Status: Customer Retained (Low Risk)**")
-                st.metric(label="Retention Probability", value=f"{probabilities[0]*100:.2f}%")
+        st.divider()
+        submit_button = st.form_submit_button(label="Submit Subscription")
 
-            st.divider()
-            st.markdown("### Submitted Profile Summary")
-            st.dataframe(st.session_state.last_input.T, use_container_width=True)
+    # Form Submission Logic
+    if submit_button:
+        st.success("Subscription entry recorded successfully!")
+        
+        # Display Summary
+        st.subheader("Submitted Record Summary")
+        submitted_data = {
+            "Age": age,
+            "Gender": gender,
+            "Region": region,
+            "Device": device,
+            "Payment Method": payment_method,
+            "Number of Profiles": number_of_profiles,
+            "Subscription Type": st.session_state.subscription_type,
+            "Monthly Fee": f"${st.session_state.monthly_fee:.2f}",
+            "Favorite Genre": favorite_genre,
+            "Avg Daily Watch Time (hrs)": avg_watch_time
+        }
+        st.json(submitted_data)
 
-        with res_col2:
-            st.markdown("### Outcome Probability Distribution")
-            prob_df = pd.DataFrame({
-                'Outcome': ['Retained', 'Churned'],
-                'Probability (%)': [probabilities[0]*100, probabilities[1]*100]
-            })
-            st.bar_chart(prob_df.set_index('Outcome'))
+
+# ---------------------------------------------------------
+# PAGE 2: View Dataset Metrics
+# ---------------------------------------------------------
+elif page == "View Dataset Metrics":
+    st.title("📊 Netflix Dataset Overview")
+    
+    @st.cache_data
+    def load_data():
+        try:
+            return pd.read_csv("netflix_customer_churn.csv")
+        except Exception:
+            return None
+
+    df = load_data()
+    
+    if df is not None:
+        st.write("Overview of the `netflix_customer_churn.csv` dataset:")
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Customers", len(df))
+        col2.metric("Basic Subscribers Fee", "$8.99")
+        col3.metric("Churn Rate", f"{(df['churned'].mean() * 100):.1f}%")
+
+        st.subheader("Sample Raw Data")
+        st.dataframe(df.head(10))
     else:
-        st.info("👈 Enter profile details in the **'📋 Customer Details Input'** tab and click **'Predict Churn Status'** first.")
-
-# TAB 3: MODEL COMPARISON
-with tab3:
-    st.subheader("Model Evaluation & Algorithm Comparison")
-    st.markdown("Benchmarking results tested on 2,000 hold-out sample records (20% test split).")
-
-    st.dataframe(
-        comparison_df.style.highlight_max(axis=0, subset=['Accuracy (%)', 'Precision (%)', 'Recall (%)', 'F1-Score (%)']),
-        use_container_width=True
-    )
-
-    st.divider()
-    st.markdown("### Accuracy Comparison Chart")
-    fig, ax = plt.subplots(figsize=(8, 3.5))
-    sns.barplot(data=comparison_df, x='Model', y='Accuracy (%)', palette='Blues_r', ax=ax)
-    ax.set_ylim(70, 100)
-    for p in ax.patches:
-        ax.annotate(f"{p.get_height():.2f}%", (p.get_x() + p.get_width() / 2., p.get_height()),
-                    ha='center', va='center', xytext=(0, 5), textcoords='offset points')
-    st.pyplot(fig)
+        st.warning("`netflix_customer_churn.csv` not found in the root directory. Please make sure it is committed to your GitHub repository.")
