@@ -19,7 +19,7 @@ PRICES = {
     "Premium": 17.99
 }
 
-# Default initial state to Basic ($8.99)
+# Initialize session state for subscription type and fee
 if "subscription_type" not in st.session_state:
     st.session_state.subscription_type = "Basic"
 
@@ -48,57 +48,57 @@ if page == "Subscription Form":
     
     st.divider()
 
-    with st.form(key="customer_subscription_form"):
-        st.subheader("1. Customer Profile")
-        col1, col2, col3 = st.columns(3)
+    st.subheader("1. Customer Profile")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        age = st.number_input("Age", min_value=12, max_value=100, value=30)
+        gender = st.selectbox("Gender", options=["Male", "Female", "Other"])
+    
+    with col2:
+        region = st.selectbox("Region", options=["Africa", "Asia", "Europe", "North America", "Oceania", "South America"])
+        device = st.selectbox("Primary Device", options=["TV", "Mobile", "Desktop", "Tablet"])
+
+    with col3:
+        payment_method = st.selectbox("Payment Method", options=["Gift Card", "Crypto", "Credit Card", "PayPal"])
+        number_of_profiles = st.number_input("Number of Profiles", min_value=1, max_value=5, value=1)
+
+    st.subheader("2. Subscription & Preferences")
+    col4, col5 = st.columns(2)
+
+    with col4:
+        # Subscription Type Dropdown (Outside form -> on_change works!)
+        st.selectbox(
+            label="Subscription Type",
+            options=list(PRICES.keys()),
+            key="subscription_type",
+            on_change=update_fee,
+            help="Selecting 'Basic' automatically sets the monthly fee to $8.99."
+        )
         
-        with col1:
-            age = st.number_input("Age", min_value=12, max_value=100, value=30)
-            gender = st.selectbox("Gender", options=["Male", "Female", "Other"])
-        
-        with col2:
-            region = st.selectbox("Region", options=["Africa", "Asia", "Europe", "North America", "Oceania", "South America"])
-            device = st.selectbox("Primary Device", options=["TV", "Mobile", "Desktop", "Tablet"])
+        # Read-only Fee Field synced to selected plan
+        st.number_input(
+            label="Monthly Fee ($)",
+            value=st.session_state.monthly_fee,
+            format="%.2f",
+            key="fee_display",
+            disabled=True,
+            help="Price automatically set based on subscription type."
+        )
 
-        with col3:
-            payment_method = st.selectbox("Payment Method", options=["Gift Card", "Crypto", "Credit Card", "PayPal"])
-            number_of_profiles = st.number_input("Number of Profiles", min_value=1, max_value=5, value=1)
+    with col5:
+        favorite_genre = st.selectbox("Favorite Genre", options=["Action", "Sci-Fi", "Drama", "Horror", "Comedy", "Documentary"])
+        avg_watch_time = st.number_input("Avg Watch Time Per Day (Hours)", min_value=0.0, max_value=24.0, value=1.5, step=0.1)
 
-        st.subheader("2. Subscription & Preferences")
-        col4, col5 = st.columns(2)
+    st.divider()
+    
+    # Action Button
+    submit_button = st.button(label="Submit Subscription", type="primary")
 
-        with col4:
-            # Subscription Type Dropdown (Defaults to Basic)
-            st.selectbox(
-                label="Subscription Type",
-                options=list(PRICES.keys()),
-                key="subscription_type",
-                on_change=update_fee,
-                help="Selecting 'Basic' automatically sets the monthly fee to $8.99."
-            )
-            
-            # Read-only Fee Field synced to selected plan
-            st.number_input(
-                label="Monthly Fee ($)",
-                value=st.session_state.monthly_fee,
-                format="%.2f",
-                key="fee_display",
-                disabled=True,
-                help="Price automatically set based on subscription type."
-            )
-
-        with col5:
-            favorite_genre = st.selectbox("Favorite Genre", options=["Action", "Sci-Fi", "Drama", "Horror", "Comedy", "Documentary"])
-            avg_watch_time = st.number_input("Avg Watch Time Per Day (Hours)", min_value=0.0, max_value=24.0, value=1.5, step=0.1)
-
-        st.divider()
-        submit_button = st.form_submit_button(label="Submit Subscription")
-
-    # Form Submission Logic
+    # Display Results on Click
     if submit_button:
         st.success("Subscription entry recorded successfully!")
         
-        # Display Summary
         st.subheader("Submitted Record Summary")
         submitted_data = {
             "Age": age,
