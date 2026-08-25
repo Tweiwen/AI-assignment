@@ -6,6 +6,7 @@ import plotly.express as px
 import plotly.graph_objects as io
 import plotly.graph_objects as go
 from scipy.stats import gaussian_kde
+import requests
 import google.generativeai as genai
 
 from model.utils import load_data, prepare_train_test_data, TARGET, NUMERICAL_FEATURES, CATEGORICAL_FEATURES
@@ -377,9 +378,6 @@ def generate_recommendations(customer_row, risk_level, churn_pct, stats):
 # ==========================================
 def generate_ai_retention_strategy(customer_row, risk_level, churn_pct, stats, api_key):
     """Generate AI-powered retention strategy using Google Gemini API via Google AI Studio."""
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-3.6-flash')
-
     prompt = f"""You are a Netflix customer retention specialist AI assistant. Analyze the following customer profile and their churn risk assessment, then provide personalized, actionable retention strategies.
 
 **Customer Profile:**
@@ -411,6 +409,29 @@ Please provide:
 
 Keep the response professional, concise, and directly actionable by retention staff. Format using markdown."""
 
+    clean_key = str(api_key).strip()
+    
+    # Try models via REST API with x-goog-api-key header (fully supports new AQ. keys and legacy AIza keys)
+    for model_name in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+            headers = {
+                "x-goog-api-key": clean_key,
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}]
+            }
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except Exception:
+            continue
+
+    # Fallback to google.generativeai SDK
+    genai.configure(api_key=clean_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
     response = model.generate_content(prompt)
     return response.text
 
