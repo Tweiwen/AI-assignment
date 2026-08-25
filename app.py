@@ -411,24 +411,40 @@ Keep the response professional, concise, and directly actionable by retention st
 
     clean_key = str(api_key).strip()
 
-    # 1. Support Groq AI (Free, high-speed LLaMA 3.3 model)
+    # 1. Support Groq AI (Free, high-speed LLaMA models)
     if clean_key.startswith("gsk_"):
         url = "https://api.groq.com/openai/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {clean_key}",
             "Content-Type": "application/json"
         }
-        payload = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.7
-        }
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            err_data = response.json().get("error", {})
-            raise Exception(f"Groq API Error ({response.status_code}): {err_data.get('message', response.text)}")
+        groq_models = [
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it"
+        ]
+        groq_err = None
+        for g_model in groq_models:
+            try:
+                payload = {
+                    "model": g_model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7
+                }
+                response = requests.post(url, headers=headers, json=payload, timeout=30)
+                if response.status_code == 200:
+                    return response.json()["choices"][0]["message"]["content"]
+                else:
+                    err_data = response.json().get("error", {})
+                    groq_err = f"Groq Error ({g_model} HTTP {response.status_code}): {err_data.get('message', response.text)}"
+            except Exception as e:
+                groq_err = str(e)
+        if groq_err:
+            raise Exception(groq_err)
 
     # 2. Support OpenAI API
     if clean_key.startswith("sk-"):
