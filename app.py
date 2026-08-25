@@ -7,7 +7,7 @@ import plotly.graph_objects as io
 import plotly.graph_objects as go
 from scipy.stats import gaussian_kde
 import requests
-import google.generativeai as genai
+from google import genai
 
 from model.utils import load_data, prepare_train_test_data, TARGET, NUMERICAL_FEATURES, CATEGORICAL_FEATURES
 from model.knn import train_knn_model, evaluate_knn, predict_knn
@@ -410,21 +410,33 @@ Please provide:
 Keep the response professional, concise, and directly actionable by retention staff. Format using markdown."""
 
     clean_key = str(api_key).strip()
-    
-    errors = []
-    for model_name in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']:
-        # Try both query param ?key= and x-goog-api-key header
-        for use_param in [True, False]:
+
+    # 1. Primary: Modern official google-genai SDK (genai.Client)
+    try:
+        client = genai.Client(api_key=clean_key)
+        for m in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash']:
             try:
-                if use_param:
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
-                    headers = {"Content-Type": "application/json"}
-                else:
+                res = client.models.generate_content(model=m, contents=prompt)
+                if res and res.text:
+                    return res.text
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # 2. Secondary fallback: Direct REST API
+    for model_name in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.5-flash']:
+        for use_header in [True, False]:
+            try:
+                if use_header:
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
                     headers = {
                         "x-goog-api-key": clean_key,
                         "Content-Type": "application/json"
                     }
+                else:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+                    headers = {"Content-Type": "application/json"}
                 
                 payload = {
                     "contents": [{"parts": [{"text": prompt}]}]
@@ -433,19 +445,10 @@ Keep the response professional, concise, and directly actionable by retention st
                 if response.status_code == 200:
                     data = response.json()
                     return data["candidates"][0]["content"]["parts"][0]["text"]
-                else:
-                    try:
-                        err_json = response.json().get("error", {})
-                        err_msg = err_json.get("message", response.text)
-                    except Exception:
-                        err_msg = response.text
-                    errors.append(f"{model_name} (HTTP {response.status_code}): {err_msg}")
-            except Exception as e:
-                errors.append(f"{model_name}: {str(e)}")
+            except Exception:
+                continue
 
-    if errors:
-        raise Exception(errors[0])
-    raise Exception("Failed to generate response from Google Gemini API.")
+    raise Exception("Failed to generate response from Google Gemini AI. Please check that your API key is valid and has Generative Language permissions.")
 
 
 # ==========================================
@@ -539,9 +542,15 @@ selected_days = st.sidebar.slider(
 )
 
 # ---- AI Configuration ----
+gemini_api_key = None
 try:
-    gemini_api_key = st.secrets["gemini"]["api_key"]
-except (KeyError, FileNotFoundError):
+    if "gemini" in st.secrets and "api_key" in st.secrets["gemini"]:
+        gemini_api_key = st.secrets["gemini"]["api_key"]
+    elif "api_key" in st.secrets:
+        gemini_api_key = st.secrets["api_key"]
+    elif "GEMINI_API_KEY" in st.secrets:
+        gemini_api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
     gemini_api_key = None
 
 # Apply filters to dataset
