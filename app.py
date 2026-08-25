@@ -1,4 +1,5 @@
 import base64
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -374,10 +375,10 @@ def generate_recommendations(customer_row, risk_level, churn_pct, stats):
 
 
 # ==========================================
-# HELPER: GENERATE AI RETENTION STRATEGY (GEMINI)
+# HELPER: GENERATE AI-ASSISTED RETENTION STRATEGY
 # ==========================================
 def generate_ai_retention_strategy(customer_row, risk_level, churn_pct, stats, api_key):
-    """Generate AI-powered retention strategy using Google Gemini API via Google AI Studio."""
+    """Generate AI-assisted retention strategy using external generative AI service."""
     prompt = f"""You are a Netflix customer retention specialist AI assistant. Analyze the following customer profile and their churn risk assessment, then provide personalized, actionable retention strategies.
 
 **Customer Profile:**
@@ -508,7 +509,7 @@ Keep the response professional, concise, and directly actionable by retention st
 
     if last_error:
         raise last_error
-    raise Exception("Unknown error communicating with Gemini API.")
+    raise Exception("Unknown error communicating with external generative AI service.")
 
 
 # ==========================================
@@ -602,16 +603,34 @@ selected_days = st.sidebar.slider(
 )
 
 # ---- AI Configuration ----
-gemini_api_key = None
+ai_api_key = None
 try:
-    if "gemini" in st.secrets and "api_key" in st.secrets["gemini"]:
-        gemini_api_key = st.secrets["gemini"]["api_key"]
+    if "ai" in st.secrets and "api_key" in st.secrets["ai"]:
+        ai_api_key = st.secrets["ai"]["api_key"]
     elif "api_key" in st.secrets:
-        gemini_api_key = st.secrets["api_key"]
+        ai_api_key = st.secrets["api_key"]
+    elif "AI_API_KEY" in st.secrets:
+        ai_api_key = st.secrets["AI_API_KEY"]
+    elif "gemini" in st.secrets and "api_key" in st.secrets["gemini"]:
+        ai_api_key = st.secrets["gemini"]["api_key"]
     elif "GEMINI_API_KEY" in st.secrets:
-        gemini_api_key = st.secrets["GEMINI_API_KEY"]
+        ai_api_key = st.secrets["GEMINI_API_KEY"]
+    elif "groq" in st.secrets and "api_key" in st.secrets["groq"]:
+        ai_api_key = st.secrets["groq"]["api_key"]
+    elif "GROQ_API_KEY" in st.secrets:
+        ai_api_key = st.secrets["GROQ_API_KEY"]
+    elif "openai" in st.secrets and "api_key" in st.secrets["openai"]:
+        ai_api_key = st.secrets["openai"]["api_key"]
+    elif "OPENAI_API_KEY" in st.secrets:
+        ai_api_key = st.secrets["OPENAI_API_KEY"]
 except Exception:
-    gemini_api_key = None
+    ai_api_key = None
+
+if not ai_api_key:
+    for env_var in ["AI_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "API_KEY"]:
+        if os.environ.get(env_var):
+            ai_api_key = os.environ.get(env_var)
+            break
 
 # Apply filters to dataset
 filtered_df = raw_df[
@@ -992,26 +1011,26 @@ with tab3:
                 st.markdown(f"- {obs}", unsafe_allow_html=True)
 
             # ============================================
-            # SECTION D — AI-Powered Retention Strategy
+            # SECTION D — AI-Assisted Retention Strategy
             # ============================================
             st.markdown("---")
-            st.markdown("#### D. AI-Powered Retention Strategy")
+            st.markdown("#### D. AI-Assisted Retention Strategy")
 
-            if gemini_api_key:
-                # --- AI-Powered Recommendations (Google Gemini) ---
+            if ai_api_key:
+                # --- AI-Assisted Recommendations (External Generative AI Service) ---
                 st.markdown(
-                    '<small style="color: #666;">Powered by Google Gemini AI via Google AI Studio</small>',
+                    '<small style="color: #666;">Powered by external generative AI service</small>',
                     unsafe_allow_html=True
                 )
 
                 # Track AI responses per customer in session state
                 ai_state_key = f"ai_retention_{selected_cid}"
 
-                if st.button("🤖 Generate AI Retention Strategy", key="gen_ai_btn", type="primary"):
-                    with st.spinner("🔄 Generating AI-powered retention strategy..."):
+                if st.button("🤖 Generate AI-Assisted Retention Strategy", key="gen_ai_btn", type="primary"):
+                    with st.spinner("🔄 Generating AI-assisted retention strategy..."):
                         try:
                             ai_response = generate_ai_retention_strategy(
-                                customer, risk_level, churn_pct, dataset_stats, gemini_api_key
+                                customer, risk_level, churn_pct, dataset_stats, ai_api_key
                             )
                             st.session_state[ai_state_key] = ai_response
                         except Exception as e:
@@ -1029,7 +1048,7 @@ with tab3:
                     st.markdown('</div>', unsafe_allow_html=True)
 
                 st.caption(
-                    "These recommendations are generated by Google Gemini AI based on the customer's "
+                    "These recommendations are generated by an external generative AI service based on the customer's "
                     "profile, engagement metrics, and predicted churn risk. They are decision-support "
                     "suggestions and should be reviewed by retention staff before any action is taken."
                 )
@@ -1037,8 +1056,8 @@ with tab3:
             else:
                 # --- Fallback: Rule-Based Recommendations ---
                 st.info(
-                    "💡 **Google Gemini API Key not configured.** Showing rule-based retention recommendations below. "
-                    "To enable AI-powered retention strategies, configure your key in `.streamlit/secrets.toml`."
+                    "💡 **AI API key not configured.** Showing rule-based retention recommendations below. "
+                    "To enable AI-assisted retention strategies, configure your AI API key in `.streamlit/secrets.toml`."
                 )
 
                 recommendations = generate_recommendations(customer, risk_level, churn_pct, dataset_stats)
@@ -1058,8 +1077,8 @@ with tab3:
                     """, unsafe_allow_html=True)
 
                 st.caption(
-                    "These are rule-based decision-support suggestions. Configure your Google Gemini API Key "
-                    "in `.streamlit/secrets.toml` to generate AI-powered personalized recommendations."
+                    "These are rule-based decision-support suggestions. Configure your AI API key "
+                    "in `.streamlit/secrets.toml` to generate AI-assisted personalized recommendations."
                 )
 
 
