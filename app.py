@@ -6,11 +6,12 @@ import plotly.express as px
 import plotly.graph_objects as io
 import plotly.graph_objects as go
 from scipy.stats import gaussian_kde
+import google.generativeai as genai
 
-from model.utils import load_data, prepare_train_test_data, TARGET
+from model.utils import load_data, prepare_train_test_data, TARGET, NUMERICAL_FEATURES, CATEGORICAL_FEATURES
 from model.knn import train_knn_model, evaluate_knn, predict_knn
 from model.lr import train_lr_model, evaluate_lr, predict_lr
-from model.rd import train_rf_model, evaluate_rf, predict_rf
+from model.rf import train_rf_model, evaluate_rf, predict_rf
 
 # Helper to load local logo as base64
 @st.cache_data
@@ -25,7 +26,7 @@ def get_logo_base64(path="Netflix_Logo.png"):
 # PAGE CONFIGURATION & THEME STYLING
 # ==========================================
 st.set_page_config(
-    page_title="Netflix Churn Analytics & Prediction",
+    page_title="Netflix Churn Prediction & Retention Support System",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -82,6 +83,13 @@ st.markdown("""
 
 
 # ==========================================
+# SESSION STATE INITIALISATION
+# ==========================================
+if 'selected_customer_id' not in st.session_state:
+    st.session_state['selected_customer_id'] = None
+
+
+# ==========================================
 # CACHED DATA & MODEL LOADING
 # ==========================================
 @st.cache_data
@@ -110,7 +118,306 @@ def get_trained_models(df):
 raw_df = get_raw_data()
 model_suite = get_trained_models(raw_df)
 
-# Main Application Title Banner with Netflix Logo
+
+# ==========================================
+# SCORE ALL CUSTOMERS WITH RANDOM FOREST
+# ==========================================
+@st.cache_data
+def score_all_customers(_rf_model, df):
+    """Use the trained Random Forest pipeline to score every customer's churn probability."""
+    feature_cols = NUMERICAL_FEATURES + CATEGORICAL_FEATURES
+    X_all = df[feature_cols]
+    probas = _rf_model.predict_proba(X_all)[:, 1]
+    
+    scored = df.copy()
+    scored['churn_probability'] = probas
+    scored['churn_pct'] = (probas * 100).round(1)
+    scored['risk_level'] = pd.cut(
+        scored['churn_pct'],
+        bins=[-1, 35, 65, 101],
+        labels=['Low', 'Medium', 'High'],
+        right=False
+)
+    scored = scored.sort_values('churn_probability', ascending=False).reset_index(drop=True)
+    return scored
+
+scored_df = score_all_customers(model_suite['Random Forest']['model'], raw_df)
+
+
+# ==========================================
+# HELPER: COMPUTE DATASET STATISTICS
+# ==========================================
+@st.cache_data
+def get_dataset_stats(df):
+    """Compute dataset-wide statistics used for engagement comparisons."""
+    return {
+        'avg_watch_hours': float(df['watch_hours'].mean()),
+        'avg_inactivity': float(df['last_login_days'].mean()),
+        'avg_daily_watch': float(df['avg_watch_time_per_day'].mean()),
+        'avg_profiles': float(df['number_of_profiles'].mean()),
+        'overall_churn_rate': float(df['churned'].mean() * 100),
+    }
+
+dataset_stats = get_dataset_stats(raw_df)
+
+
+# ==========================================
+# HELPER: GENERATE ENGAGEMENT SUMMARY
+# ==========================================
+def generate_engagement_summary(customer_row, stats):
+    """
+    Generate 2-4 simple factual observations comparing the customer's
+    engagement metrics against dataset averages.
+    Uses careful language — never claims causation.
+    """
+    observations = []
+
+    # Inactivity comparison
+    inactivity = customer_row['last_login_days']
+    avg_inact = stats['avg_inactivity']
+
+    if inactivity > avg_inact:
+        observations.append(
+            f"This customer has been inactive for "
+            f"**<span style='color:red;'>{int(inactivity)}</span> days**, "
+            f"compared with the dataset average of **{avg_inact:.0f} days**."
+        )
+    else:
+        observations.append(
+            f"This customer's inactivity period is "
+            f"**<span style='color:red;'>{int(inactivity)}</span> days**, "
+            f"which is at or below the dataset average of **{avg_inact:.0f} days**."
+        )
+
+
+    # Average daily watch time comparison
+    avg_daily = customer_row['avg_watch_time_per_day']
+    ds_avg_daily = stats['avg_daily_watch']
+
+    if avg_daily < ds_avg_daily:
+        observations.append(
+            f"Average daily viewing is "
+            f"**<span style='color:red;'>{avg_daily:.2f}</span> hours**, "
+            f"compared with the dataset average of **{ds_avg_daily:.2f} hours**."
+        )
+    else:
+        observations.append(
+            f"Average daily viewing is "
+            f"**<span style='color:red;'>{avg_daily:.2f}</span> hours**, "
+            f"which is at or above the dataset average of **{ds_avg_daily:.2f} hours**."
+        )
+
+
+    # Total watch hours comparison
+    watch_hours = customer_row['watch_hours']
+    avg_wh = stats['avg_watch_hours']
+
+    if watch_hours < avg_wh:
+        observations.append(
+            f"Total watch hours are "
+            f"**<span style='color:red;'>{watch_hours:.1f}</span> hours**, "
+            f"compared with the dataset average of **{avg_wh:.1f} hours**."
+        )
+    else:
+        observations.append(
+            f"Total watch hours are "
+            f"**<span style='color:red;'>{watch_hours:.1f}</span> hours**, "
+            f"which is at or above the dataset average of **{avg_wh:.1f} hours**."
+        )
+
+
+    # Number of profiles (only mention if notably low)
+    profiles = customer_row['number_of_profiles']
+    avg_prof = stats['avg_profiles']
+
+    if profiles <= 1:
+        observations.append(
+            f"This customer uses only "
+            f"**<span style='color:red;'>{int(profiles)}</span> profile**, "
+            f"compared with the dataset average of **{avg_prof:.1f} profiles**."
+        )
+
+    return observations
+
+
+# ==========================================
+# HELPER: GENERATE RETENTION RECOMMENDATIONS
+# ==========================================
+def generate_recommendations(customer_row, risk_level, churn_pct, stats):
+    """
+    Generate rule-based retention strategy suggestions based on the
+    customer's predicted risk level and account characteristics.
+    These are decision-support suggestions, not ML model outputs.
+    """
+    recommendations = []
+    risk_str = str(risk_level)
+
+    if risk_str == 'High':
+        # High risk + high inactivity
+        if customer_row['last_login_days'] > stats['avg_inactivity']:
+            recommendations.append({
+                'action': '📧 Re-engagement Message & Retention Voucher',
+                'detail': (
+                    f"This customer has been inactive for {int(customer_row['last_login_days'])} days. "
+                    f"Send a personalised re-engagement message and consider providing a limited-time "
+                    f"retention voucher or subscription discount to encourage the customer to return."
+                ),
+                'priority': 'High'
+            })
+
+        # High risk + low viewing activity
+        if customer_row['watch_hours'] < stats['avg_watch_hours'] or customer_row['avg_watch_time_per_day'] < stats['avg_daily_watch']:
+            genre = customer_row['favorite_genre']
+            recommendations.append({
+                'action': f'🎬 Personalised Content & Retention Incentive',
+                'detail': (
+                    f"Provide personalised recommendations based on the customer's favourite genre "
+                    f"(**{genre}**) and consider a limited-time retention incentive. For example, "
+                    f"recommend newly available {genre} content together with a retention voucher."
+                ),
+                'priority': 'High'
+            })
+
+        # High risk + Basic plan → trial upgrade
+        if customer_row['subscription_type'] == 'Basic':
+            recommendations.append({
+                'action': '⬆️ Temporary Free Trial Upgrade',
+                'detail': (
+                    "This high-risk customer is on the Basic plan ($8.99/month). Consider offering a "
+                    "temporary free trial upgrade from Basic to Standard as a retention incentive to "
+                    "demonstrate additional value and features."
+                ),
+                'priority': 'High'
+            })
+
+        # Premium customer + low usage → suggest downgrade
+        if customer_row['subscription_type'] == 'Premium' and customer_row['watch_hours'] < stats['avg_watch_hours']:
+            recommendations.append({
+                'action': '💰 Review Subscription Plan',
+                'detail': (
+                    "This customer is on the Premium plan ($17.99/month) but has below-average viewing "
+                    "activity. Consider recommending a lower-cost subscription plan if the customer is "
+                    "not making sufficient use of the Premium plan, which may improve perceived value."
+                ),
+                'priority': 'High'
+            })
+
+        # General high-risk retention promotion (if few recs so far)
+        if len(recommendations) < 2:
+            recommendations.append({
+                'action': '🎁 Targeted Retention Promotion',
+                'detail': (
+                    f"With a churn probability of {churn_pct:.1f}%, consider offering a targeted "
+                    f"retention promotion such as a temporary subscription discount, bonus feature "
+                    f"access, or loyalty reward to reduce churn risk."
+                ),
+                'priority': 'High'
+            })
+
+    elif risk_str == 'Medium':
+        # Content recommendations
+        genre = customer_row['favorite_genre']
+        recommendations.append({
+            'action': f'🎬 Personalised {genre} Content Recommendations',
+            'detail': (
+                f"Send personalised content recommendations based on the customer's favourite genre "
+                f"(**{genre}**) to maintain engagement and increase viewing time."
+            ),
+            'priority': 'Medium'
+        })
+
+        if customer_row['last_login_days'] > stats['avg_inactivity']:
+            recommendations.append({
+                'action': '📧 Gentle Check-in Message',
+                'detail': (
+                    f"This customer has been inactive for {int(customer_row['last_login_days'])} days. "
+                    f"A friendly check-in message with content updates may help maintain engagement "
+                    f"before risk escalates."
+                ),
+                'priority': 'Medium'
+            })
+
+        # Small retention voucher consideration
+        recommendations.append({
+            'action': '🎁 Consider Small Retention Voucher',
+            'detail': (
+                "If customer engagement continues to decrease, consider providing a small retention "
+                "voucher as an incentive to continue the subscription. Continue monitoring engagement trends."
+            ),
+            'priority': 'Medium'
+        })
+
+        # Premium medium-risk with low usage
+        if customer_row['subscription_type'] == 'Premium' and customer_row['watch_hours'] < stats['avg_watch_hours']:
+            recommendations.append({
+                'action': '💰 Review Subscription Plan',
+                'detail': (
+                    "This customer is on the Premium plan but has below-average viewing activity. "
+                    "Consider recommending a lower-cost plan if the customer is not making sufficient "
+                    "use of Premium features, which may improve value perception and retention."
+                ),
+                'priority': 'Medium'
+            })
+
+    else:  # Low risk
+        recommendations.append({
+            'action': '✅ No Immediate Retention Intervention Required',
+            'detail': (
+                f"This customer's churn probability is {churn_pct:.1f}%, which is classified as low risk. "
+                f"Continue normal customer engagement and monitoring. No immediate retention action is needed."
+            ),
+            'priority': 'Low'
+        })
+
+    return recommendations
+
+
+# ==========================================
+# HELPER: GENERATE AI RETENTION STRATEGY (GEMINI)
+# ==========================================
+def generate_ai_retention_strategy(customer_row, risk_level, churn_pct, stats, api_key):
+    """Generate AI-powered retention strategy using Google Gemini API via Google AI Studio."""
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-3.6-flash')
+
+    prompt = f"""You are a Netflix customer retention specialist AI assistant. Analyze the following customer profile and their churn risk assessment, then provide personalized, actionable retention strategies.
+
+**Customer Profile:**
+- Customer ID: {customer_row['customer_id']}
+- Age: {int(customer_row['age'])} | Gender: {customer_row['gender']} | Region: {customer_row['region']}
+- Subscription Plan: {customer_row['subscription_type']} (${customer_row['monthly_fee']:.2f}/month)
+- Payment Method: {customer_row['payment_method']}
+- Primary Device: {customer_row['device']}
+- Favourite Genre: {customer_row['favorite_genre']}
+- Number of Profiles: {int(customer_row['number_of_profiles'])}
+
+**Engagement Metrics (Customer vs Dataset Average):**
+- Total Watch Hours: {customer_row['watch_hours']:.1f} hrs (Dataset Avg: {stats['avg_watch_hours']:.1f} hrs)
+- Avg Daily Watch Time: {customer_row['avg_watch_time_per_day']:.2f} hrs (Dataset Avg: {stats['avg_daily_watch']:.2f} hrs)
+- Inactivity Days (Days Since Last Login): {int(customer_row['last_login_days'])} days (Dataset Avg: {stats['avg_inactivity']:.0f} days)
+- Number of Profiles: {int(customer_row['number_of_profiles'])} (Dataset Avg: {stats['avg_profiles']:.1f})
+
+**Churn Risk Assessment:**
+- Predicted Churn Probability: {churn_pct:.1f}%
+- Risk Level: {risk_level}
+
+Please provide:
+1. **Risk Analysis**: A concise 2-3 sentence assessment explaining the key factors contributing to this customer's churn risk.
+2. **Retention Strategies**: Provide 2-4 specific, actionable retention strategies tailored to this customer's unique profile. For each strategy include:
+   - An emoji icon and clear strategy name
+   - Detailed action steps
+   - Priority level (High / Medium / Low)
+   - Expected impact
+
+Keep the response professional, concise, and directly actionable by retention staff. Format using markdown."""
+
+    response = model.generate_content(prompt)
+    return response.text
+
+
+# ==========================================
+# MAIN APPLICATION TITLE BANNER
+# ==========================================
 logo_b64 = get_logo_base64("Netflix_Logo.png")
 if logo_b64:
     logo_img_html = f'<img src="data:image/png;base64,{logo_b64}" height="55" style="object-fit: contain;" />'
@@ -120,15 +427,16 @@ else:
 st.markdown(f"""
 <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px; padding-bottom: 5px;">
     {logo_img_html}
-    <h1 style="color: #B81D24; margin: 0; font-weight: 800; font-size: 2.2rem; line-height: 1.2;">Netflix Churn Analytics & Prediction</h1>
+    <h1 style="color: #B81D24; margin: 0; font-weight: 800; font-size: 2.2rem; line-height: 1.2;">Netflix Churn Prediction & Retention Support System</h1>
 </div>
 """, unsafe_allow_html=True)
 
+
 # ==========================================
-# 1. SIDEBAR FILTER BAR
+# SIDEBAR FILTER BAR
 # ==========================================
 st.sidebar.markdown("## Dataset Filter Bar")
-st.sidebar.markdown("<small style='color: #666;'>Filter customer records across all chart visualizations</small>", unsafe_allow_html=True)
+st.sidebar.markdown("<small style='color: #666;'>Filter customer records across chart visualizations</small>", unsafe_allow_html=True)
 
 # Filter: Subscription Type
 sub_types = sorted(raw_df['subscription_type'].unique().tolist())
@@ -197,6 +505,9 @@ selected_days = st.sidebar.slider(
     value=(min_days, max_days)
 )
 
+# ---- AI Configuration ----
+gemini_api_key = st.secrets["gemini"]["api_key"]
+
 # Apply filters to dataset
 filtered_df = raw_df[
     (raw_df['subscription_type'].isin(selected_subs)) &
@@ -213,35 +524,89 @@ filtered_df = raw_df[
 # ==========================================
 # MAIN TAB NAVIGATION
 # ==========================================
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Data Explorer",
-    "Visualisation Dashboard",
-    "Model Comparison",
-    "Predictor"
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📊 Churn Overview",
+    "⚠️ At-Risk Customers",
+    "🔍 Customer Assessment & Retention Strategy",
+    "📈 Analytics & Exploration",
+    "🤖 Model Evaluation",
+    "🎯 Individual Churn Predictor"
 ])
 
 
 # ==========================================
-# TAB 1: DATA EXPLORER
+# TAB 1: CHURN OVERVIEW
 # ==========================================
 with tab1:
-    st.markdown("### Dataset Overview & Breakdown")
+    st.markdown("### Churn Overview Dashboard")
+    st.markdown("<small style='color: #666;'>Key performance indicators and churn breakdown summary for operational decision-making</small>", unsafe_allow_html=True)
     
     if filtered_df.empty:
         st.warning("⚠️ No records match the selected sidebar filters. Please broaden your filter criteria.")
     else:
         total_records = len(filtered_df)
-        churn_count = filtered_df['churned'].sum()
+        churn_count = int(filtered_df['churned'].sum())
         retained_count = total_records - churn_count
         churn_rate = (churn_count / total_records * 100) if total_records > 0 else 0
+        avg_inactivity = filtered_df['last_login_days'].mean()
+        avg_watch = filtered_df['watch_hours'].mean()
         
-        basic_count = len(filtered_df[filtered_df['subscription_type'] == 'Basic'])
-        std_count = len(filtered_df[filtered_df['subscription_type'] == 'Standard'])
-        prem_count = len(filtered_df[filtered_df['subscription_type'] == 'Premium'])
-
-        # Total Records & Target Variable text summary with Target Variable Pie Chart
+        # KPI Cards
+        st.markdown("#### Key Metrics")
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        
+        with kpi1:
+            st.metric(label="Total Customers", value=f"{total_records:,}")
+        with kpi2:
+            st.metric(label="Churn Rate", value=f"{churn_rate:.1f}%", delta=f"{churn_count:,} churned", delta_color="inverse")
+        with kpi3:
+            st.metric(label="Avg Inactivity Days", value=f"{avg_inactivity:.0f} days")
+        with kpi4:
+            st.metric(label="Avg Watch Hours", value=f"{avg_watch:.1f} hrs")
+        
+        st.markdown("---")
+        
+        # Risk Distribution (always Random Forest)
+        st.markdown("#### Customer Risk Distribution")
+        st.caption("We use Random Forest as our dafault model because it achieved the best overall performance among the evaluated models.")
+        
+        risk_counts = scored_df['risk_level'].value_counts()
+        high_count = int(risk_counts.get('High', 0))
+        med_count = int(risk_counts.get('Medium', 0))
+        low_count = int(risk_counts.get('Low', 0))
+        
+        risk_col1, risk_col2, risk_col3 = st.columns(3)
+        with risk_col1:
+            st.markdown(f"""
+            <div style="background: #FEF2F2; border-left: 4px solid #B81D24; padding: 15px; border-radius: 6px;">
+                <div style="font-size: 0.85rem; color: #991B1B; font-weight: 600;">🔴 HIGH RISK</div>
+                <div style="font-size: 1.8rem; font-weight: 800; color: #B81D24;">{high_count:,}</div>
+                <div style="font-size: 0.75rem; color: #666;">Churn probability ≥ 65%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with risk_col2:
+            st.markdown(f"""
+            <div style="background: #FFFBEB; border-left: 4px solid #D97706; padding: 15px; border-radius: 6px;">
+                <div style="font-size: 0.85rem; color: #92400E; font-weight: 600;">🟡 MEDIUM RISK</div>
+                <div style="font-size: 1.8rem; font-weight: 800; color: #D97706;">{med_count:,}</div>
+                <div style="font-size: 0.75rem; color: #666;">Churn probability ≥ 35%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with risk_col3:
+            st.markdown(f"""
+            <div style="background: #F0FDF4; border-left: 4px solid #16A34A; padding: 15px; border-radius: 6px;">
+                <div style="font-size: 0.85rem; color: #166534; font-weight: 600;">🟢 LOW RISK</div>
+                <div style="font-size: 1.8rem; font-weight: 800; color: #16A34A;">{low_count:,}</div>
+                <div style="font-size: 0.75rem; color: #666;">Churn probability < 35%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Dataset Summary & Churn Breakdown Pie
         col_text, col_target_pie = st.columns([1.2, 1])
         with col_text:
+            st.markdown("#### Dataset Summary")
             st.markdown(f"**Total Records**: {total_records:,} fully populated records (0 missing values, 0 duplicates).")
             st.markdown("**Total Features**: 14 columns (1 ID, 1 Target, 12 Predictors)")
             st.markdown("**Target Variable**: Churned (1 = Churned, 0 = Retained)")
@@ -265,8 +630,12 @@ with tab1:
 
         st.markdown("---")
         
-        # Subscription Breakdown in Table
+        # Subscription Breakdown Summary
         st.markdown("#### Subscription Breakdown Summary")
+        basic_count = len(filtered_df[filtered_df['subscription_type'] == 'Basic'])
+        std_count = len(filtered_df[filtered_df['subscription_type'] == 'Standard'])
+        prem_count = len(filtered_df[filtered_df['subscription_type'] == 'Premium'])
+        
         sub_df = pd.DataFrame([
             {"Plan": "Basic", "Monthly Fee": "$8.99", "Count": basic_count, "Percentage": f"{(basic_count/total_records*100):.1f}%" if total_records else "0%"},
             {"Plan": "Standard", "Monthly Fee": "$13.99", "Count": std_count, "Percentage": f"{(std_count/total_records*100):.1f}%" if total_records else "0%"},
@@ -288,48 +657,334 @@ with tab1:
             fig_sub_pie.update_layout(template="plotly_white", height=240, margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig_sub_pie, use_container_width=True)
 
-        st.markdown("---")
-        st.markdown("#### Dataset Preview")
-        
-        # Rows to view control
-        row_options = [5, 10, 20, 50, 100, "All"]
-        selected_rows = st.selectbox("Rows to view:", options=row_options, index=2)
-        
-        # Dataset without customer_id
-        preview_df = filtered_df.drop(columns=['customer_id'], errors='ignore')
-        
-        if selected_rows != "All":
-            preview_df = preview_df.head(int(selected_rows))
-            
-        st.dataframe(preview_df, use_container_width=True, height=350)
-
 
 # ==========================================
-# TAB 2: VISUALISATION DASHBOARD
+# TAB 2: AT-RISK CUSTOMERS
 # ==========================================
 with tab2:
-    st.markdown("### Visualisation Dashboard")
-    st.markdown("<small style='color: #666;'>Visualizing churn risk factors using filtered customer data</small>", unsafe_allow_html=True)
-    
+    st.markdown("### At-Risk Customers")
+    st.markdown("<small style='color: #666;'>This tab is for staff to prioritise customers who may require attention.</small>", unsafe_allow_html=True)
+
+    # ---- Filter Controls ----
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
+
+    with ctrl_col1:
+        risk_filter = st.selectbox(
+            "Risk Level",
+            options=['All', 'High', 'Medium', 'Low'],
+            index=0,
+            key='atrisk_risk_filter'
+        )
+
+    with ctrl_col2:
+        sub_filter = st.selectbox(
+            "Subscription Type",
+            options=['All', 'Basic', 'Standard', 'Premium'],
+            index=0,
+            key='atrisk_sub_filter'
+        )
+
+    with ctrl_col3:
+        show_count = st.selectbox(
+            "Show",
+            options=['Top 10', 'Top 25', 'Top 50', 'All'],
+            index=1,
+            key='atrisk_show_count'
+        )
+
+    # ---- Apply filters ----
+    display_df = scored_df.copy()
+
+    if risk_filter != 'All':
+        display_df = display_df[display_df['risk_level'] == risk_filter]
+
+    if sub_filter != 'All':
+        display_df = display_df[display_df['subscription_type'] == sub_filter]
+
+    # Apply row limit
+    show_map = {'Top 10': 10, 'Top 25': 25, 'Top 50': 50, 'All': len(display_df)}
+    limit = show_map.get(show_count, 25)
+    display_df = display_df.head(limit)
+
+    # ---- Summary ----
+    st.markdown(
+        f"**Showing {len(display_df):,} customers** | "
+        f"🔴 High: {len(display_df[display_df['risk_level'] == 'High']):,} | "
+        f"🟡 Medium: {len(display_df[display_df['risk_level'] == 'Medium']):,} | "
+        f"🟢 Low: {len(display_df[display_df['risk_level'] == 'Low']):,}"
+    )
+
+    # ---- Display Table ----
+    table_df = display_df[[
+        'customer_id', 'churn_pct', 'risk_level', 'subscription_type',
+        'watch_hours', 'avg_watch_time_per_day', 'last_login_days'
+    ]].copy()
+    table_df.columns = [
+        'Customer ID', 'Churn Prob (%)', 'Risk Level', 'Subscription',
+        'Watch Hours', 'Avg Daily Watch (hrs)', 'Inactivity Days'
+    ]
+
+    st.dataframe(
+        table_df,
+        use_container_width=True,
+        height=420,
+        hide_index=True,
+        column_config={
+            'Churn Prob (%)': st.column_config.ProgressColumn(
+                "Churn Prob (%)",
+                help="Predicted churn probability from Random Forest",
+                min_value=0,
+                max_value=100,
+                format="%.1f%%"
+            ),
+        }
+    )
+
+
+# ==========================================
+# TAB 3: CUSTOMER ASSESSMENT & RETENTION STRATEGY
+# ==========================================
+with tab3:
+    st.markdown("### Customer Assessment & Retention Strategy")
+    st.markdown("<small style='color: #666;'>This tab shows the risk rofile, engagement summary and retention recommendations for the selected customer.</small>", unsafe_allow_html=True)
+
+
+    # ---- Customer Selection ----
+    st.markdown("---")
+    st.markdown("#### Select a Customer for Assessment")
+
+    if not display_df.empty:
+        # Build meaningful labels for the selectbox
+        select_options = []
+        for _, row in display_df.iterrows():
+            label = (
+                f"{row['customer_id']} — {row['churn_pct']}% "
+                f"{row['risk_level']} Risk — {row['subscription_type']}"
+            )
+            select_options.append(label)
+
+        selected_label = st.selectbox(
+            "Choose a customer:",
+            options=select_options,
+            index=0,
+            key='atrisk_customer_select'
+        )
+
+        # Extract customer_id from label
+        selected_cid = selected_label.split(" — ")[0]
+        st.session_state['selected_customer_id'] = selected_cid
+
+    selected_cid = st.session_state.get('selected_customer_id', None)
+
+    if not selected_cid:
+        st.info("👈 Please select a customer from the **⚠️ At-Risk Customers** tab first.")
+    else:
+        match = scored_df[scored_df['customer_id'] == selected_cid]
+
+        if match.empty:
+            st.error(f"❌ Customer ID '{selected_cid}' not found in the dataset.")
+        else:
+            customer = match.iloc[0]
+            churn_pct = float(customer['churn_pct'])
+            risk_level = str(customer['risk_level'])
+
+            # ============================================
+            # SECTION A — Customer Risk Profile
+            # ============================================
+            st.markdown("---")
+            st.markdown("#### A. Customer Risk Profile")
+
+            profile_col1, profile_col2 = st.columns([1.3, 1])
+
+            with profile_col1:
+                # Risk level badge
+                if risk_level == 'High':
+                    st.error(f"⚠️ **HIGH RISK** — Churn Probability: {churn_pct}%")
+                elif risk_level == 'Medium':
+                    st.warning(f"⚡ **MEDIUM RISK** — Churn Probability: {churn_pct}%")
+                else:
+                    st.success(f"✅ **LOW RISK** — Churn Probability: {churn_pct}%")
+
+                # Customer information table
+                st.markdown(f"""
+| Attribute | Value |
+|---|---|
+| **Customer ID** | `{customer['customer_id']}` |
+| **Age** | {int(customer['age'])} |
+| **Gender** | {customer['gender']} |
+| **Region** | {customer['region']} |
+| **Subscription Plan** | {customer['subscription_type']} (${customer['monthly_fee']:.2f}/month) |
+| **Payment Method** | {customer['payment_method']} |
+| **Primary Device** | {customer['device']} |
+| **Favourite Genre** | {customer['favorite_genre']} |
+| **Number of Profiles** | {int(customer['number_of_profiles'])} |
+| **Total Watch Hours** | {customer['watch_hours']:.1f} hrs |
+| **Avg Daily Watch Time** | {customer['avg_watch_time_per_day']:.2f} hrs |
+| **Inactivity Days** | {int(customer['last_login_days'])} days |
+                """)
+
+            with profile_col2:
+                # Churn Probability Gauge
+                fig_gauge = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=churn_pct,
+                    domain={'x': [0.05, 0.95], 'y': [0, 0.9]},
+                    title={'text': "Churn Probability (%)", 'font': {'size': 13, 'color': '#111111'}},
+                    number={'suffix': "%", 'font': {'size': 20}},
+                    gauge={
+                        'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "#333333", 'tickfont': {'size': 10}},
+                        'bar': {'color': "#B81D24" if churn_pct >= 50 else "#221F1F"},
+                        'bgcolor': "#FFFFFF",
+                        'bordercolor': "#CCCCCC",
+                        'steps': [
+                            {'range': [0, 35], 'color': 'rgba(34, 31, 31, 0.1)'},
+                            {'range': [35, 65], 'color': 'rgba(241, 196, 15, 0.15)'},
+                            {'range': [65, 100], 'color': 'rgba(184, 29, 36, 0.15)'}
+                        ]
+                    }
+                ))
+                fig_gauge.update_layout(template="plotly_white", height=200, margin=dict(l=15, r=15, t=35, b=10))
+                st.plotly_chart(fig_gauge, use_container_width=True)
+
+            # ============================================
+            # SECTION B — Quick Comparison with Dataset Averages
+            # ============================================
+            st.markdown("---")
+            st.markdown("#### B. Quick Comparison with Dataset Averages")
+
+            compare_data = pd.DataFrame([
+                {
+                    "Measure": "Watch Hours",
+                    "Customer": f"{customer['watch_hours']:.1f}",
+                    "Dataset Average": f"{dataset_stats['avg_watch_hours']:.1f}"
+                },
+                {
+                    "Measure": "Avg Daily Watch (hrs)",
+                    "Customer": f"{customer['avg_watch_time_per_day']:.2f}",
+                    "Dataset Average": f"{dataset_stats['avg_daily_watch']:.2f}"
+                },
+                {
+                    "Measure": "Inactivity Days",
+                    "Customer": f"{int(customer['last_login_days'])}",
+                    "Dataset Average": f"{dataset_stats['avg_inactivity']:.0f}"
+                },
+                {
+                    "Measure": "Number of Profiles",
+                    "Customer": f"{int(customer['number_of_profiles'])}",
+                    "Dataset Average": f"{dataset_stats['avg_profiles']:.1f}"
+                },
+            ])
+            st.dataframe(compare_data, use_container_width=True, hide_index=True)
+
+            # ============================================
+            # SECTION C — Customer Engagement Summary
+            # ============================================
+            st.markdown("---")
+            st.markdown("#### C. Customer Engagement Summary")
+
+            observations = generate_engagement_summary(customer, dataset_stats)
+            for obs in observations:
+                st.markdown(f"- {obs}", unsafe_allow_html=True)
+
+            # ============================================
+            # SECTION D — AI-Powered Retention Strategy
+            # ============================================
+            st.markdown("---")
+            st.markdown("#### D. AI-Powered Retention Strategy")
+
+            if gemini_api_key:
+                # --- AI-Powered Recommendations (Google Gemini) ---
+                st.markdown(
+                    '<small style="color: #666;">Powered by Google Gemini AI via Google AI Studio</small>',
+                    unsafe_allow_html=True
+                )
+
+                # Track AI responses per customer in session state
+                ai_state_key = f"ai_retention_{selected_cid}"
+
+                if st.button("🤖 Generate AI Retention Strategy", key="gen_ai_btn", type="primary"):
+                    with st.spinner("🔄 Generating AI-powered retention strategy..."):
+                        try:
+                            ai_response = generate_ai_retention_strategy(
+                                customer, risk_level, churn_pct, dataset_stats, gemini_api_key
+                            )
+                            st.session_state[ai_state_key] = ai_response
+                        except Exception as e:
+                            st.error(f"❌ Failed to generate AI recommendation: {e}")
+
+                # Display the AI response if available
+                if ai_state_key in st.session_state:
+                    st.markdown(
+                        f'<div style="background: #F8F9FA; border: 1px solid #E9ECEF; '
+                        f'border-left: 4px solid #B81D24; padding: 18px 20px; '
+                        f'border-radius: 8px; margin-top: 10px;">',
+                        unsafe_allow_html=True
+                    )
+                    st.markdown(st.session_state[ai_state_key])
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                st.caption(
+                    "These recommendations are generated by Google Gemini AI based on the customer's "
+                    "profile, engagement metrics, and predicted churn risk. They are decision-support "
+                    "suggestions and should be reviewed by retention staff before any action is taken."
+                )
+
+            else:
+                # --- Fallback: Rule-Based Recommendations ---
+                st.info(
+                    "🔑 Enter your **Google AI Studio API Key** in the sidebar to unlock "
+                    "AI-powered retention strategies. Showing rule-based recommendations below."
+                )
+
+                recommendations = generate_recommendations(customer, risk_level, churn_pct, dataset_stats)
+
+                for rec in recommendations:
+                    priority_colors = {'High': '#FEF2F2', 'Medium': '#FFFBEB', 'Low': '#F0FDF4'}
+                    priority_borders = {'High': '#B81D24', 'Medium': '#D97706', 'Low': '#16A34A'}
+                    bg_color = priority_colors.get(rec['priority'], '#F3F4F6')
+                    border_color = priority_borders.get(rec['priority'], '#999')
+
+                    st.markdown(f"""
+<div style="background: {bg_color}; border-left: 4px solid {border_color}; padding: 12px 15px; border-radius: 6px; margin-bottom: 10px;">
+    <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 4px;">{rec['action']}</div>
+    <div style="font-size: 0.85rem; color: #374151;">{rec['detail']}</div>
+    <div style="font-size: 0.72rem; color: #666; margin-top: 6px;">Priority: {rec['priority']}</div>
+</div>
+                    """, unsafe_allow_html=True)
+
+                st.caption(
+                    "These are rule-based decision-support suggestions. Enter a Google AI Studio API Key "
+                    "in the sidebar to generate AI-powered personalised recommendations."
+                )
+
+
+# ==========================================
+# TAB 4: ANALYTICS & EXPLORATION
+# ==========================================
+with tab4:
+    st.markdown("### Analytics & Exploration")
+    st.markdown("<small style='color: #666;'>Visualising churn risk factors and exploring customer data using filtered records</small>", unsafe_allow_html=True)
+
     if filtered_df.empty:
         st.warning("⚠️ No records match the current sidebar filter selection. Please adjust your filters.")
     else:
+        # ---- VISUALISATION DASHBOARD (all 4 existing charts preserved) ----
+        st.markdown("#### Churn Visualisation Dashboard")
         grid_row1_col1, grid_row1_col2 = st.columns(2)
-        
-        # GRAPH 1: Subscription Type vs. Churn Rate (Vertical Bar Chart)
+
+        # GRAPH 1: Subscription Type vs. Churn Rate
         with grid_row1_col1:
-            st.markdown("#### 1. Subscription Type vs. Churn Rate")
+            st.markdown("##### 1. Subscription Type vs. Churn Rate")
             g1_data = filtered_df.groupby('subscription_type')['churned'].agg(
                 Total='count',
                 Churned='sum',
                 ChurnRate=lambda x: (x.sum() / x.count()) * 100
             ).reset_index()
-            
-            # Ensure fixed order Basic, Standard, Premium
+
             plan_order = {'Basic': 1, 'Standard': 2, 'Premium': 3}
             g1_data['order'] = g1_data['subscription_type'].map(plan_order)
             g1_data = g1_data.sort_values('order')
-            
+
             fig1 = px.bar(
                 g1_data,
                 x='subscription_type',
@@ -349,12 +1004,12 @@ with tab2:
             )
             st.plotly_chart(fig1, use_container_width=True)
 
-        # GRAPH 2: Watch Hours Distribution by Churn Status (Comparative Box Plot)
+        # GRAPH 2: Watch Hours Distribution by Churn Status
         with grid_row1_col2:
-            st.markdown("#### 2. Watch Hours Distribution by Churn Status")
+            st.markdown("##### 2. Watch Hours Distribution by Churn Status")
             g2_df = filtered_df.copy()
             g2_df['Churn_Label'] = g2_df['churned'].map({0: 'Retained', 1: 'Churned'})
-            
+
             fig2 = px.box(
                 g2_df,
                 x='Churn_Label',
@@ -375,12 +1030,12 @@ with tab2:
         st.markdown("---")
         grid_row2_col1, grid_row2_col2 = st.columns(2)
 
-        # GRAPH 3: Number of Profiles vs. Churn Rate (Grouped Bar Chart)
+        # GRAPH 3: Number of Profiles vs. Churn Rate
         with grid_row2_col1:
-            st.markdown("#### 3. Number of Profiles vs. Churn Rate")
+            st.markdown("##### 3. Number of Profiles vs. Churn Rate")
             g3_df = filtered_df.groupby(['number_of_profiles', 'churned']).size().reset_index(name='count')
             g3_df['Churn Status'] = g3_df['churned'].map({0: 'Retained', 1: 'Churned'})
-            
+
             fig3 = px.bar(
                 g3_df,
                 x='number_of_profiles',
@@ -397,16 +1052,16 @@ with tab2:
             )
             st.plotly_chart(fig3, use_container_width=True)
 
-        # GRAPH 4: Inactivity Days vs. Churn Probability Trend Line Chart
+        # GRAPH 4: Inactivity Days vs. Churn Rate
         with grid_row2_col2:
-            st.markdown("#### 4. Inactivity Days vs. Churn Probability Trend")
+            st.markdown("##### 4. Inactivity Days vs. Churn Rate")
             g4_df = filtered_df.copy()
             g4_df['inactivity_bin'] = (g4_df['last_login_days'] // 5) * 5
             trend_df = g4_df.groupby('inactivity_bin')['churned'].agg(
                 Total='count',
                 ChurnRate=lambda x: (x.sum() / x.count()) * 100
             ).reset_index()
-            
+
             fig4 = px.line(
                 trend_df,
                 x='inactivity_bin',
@@ -423,15 +1078,31 @@ with tab2:
             )
             st.plotly_chart(fig4, use_container_width=True)
 
+        # ---- DATASET PREVIEW ----
+        st.markdown("---")
+        st.markdown("#### Dataset Preview")
+
+        row_options = [5, 10, 20, 50, 100, "All"]
+        selected_rows = st.selectbox("Rows to view:", options=row_options, index=2)
+
+        preview_df = filtered_df.drop(columns=['customer_id'], errors='ignore')
+
+        if selected_rows != "All":
+            preview_df = preview_df.head(int(selected_rows))
+
+        st.dataframe(preview_df, use_container_width=True, height=350)
+
 
 # ==========================================
-# TAB 3: MODEL COMPARISON
+# TAB 5: MODEL EVALUATION
 # ==========================================
-with tab3:
-    st.markdown("### Machine Learning Model Comparison")
-    st.markdown("<small style='color: #666;'>Evaluating KNN, Random Forest, and Logistic Regression models on held-out test data (20% split)</small>", unsafe_allow_html=True)
-    
-    # Metrics Table Construction (Decimals Only)
+with tab5:
+    st.markdown("### Machine Learning Model Evaluation")
+    st.markdown("<small style='color: #666;'>Academic comparison of KNN, Logistic Regression, and Random Forest on held-out test data (20% split)</small>", unsafe_allow_html=True)
+
+    # Metrics Table
+    st.markdown("#### Model Evaluation Performance Table")
+
     metrics_summary = []
     for model_name in ['KNN', 'Logistic Regression', 'Random Forest']:
         m = model_suite[model_name]['metrics']
@@ -442,23 +1113,24 @@ with tab3:
             'Recall': f"{m['Recall']:.4f}",
             'F1-Score': f"{m['F1-Score']:.4f}"
         })
-        
+
     metrics_df = pd.DataFrame(metrics_summary)
-    
-    st.markdown("#### Model Evaluation Performance Table")
     st.dataframe(metrics_df, use_container_width=True, hide_index=True)
-    
+
     st.markdown("---")
     st.markdown("#### Actual vs Predicted Performance Visualizations")
-    
+
     col_cm, col_pred_compare = st.columns([1, 1])
-    
+
     with col_cm:
         st.markdown("##### Confusion Matrices")
-        selected_cm_model = st.selectbox("Select Model for Confusion Matrix:", options=['Random Forest', 'Logistic Regression', 'KNN'])
-        
+        selected_cm_model = st.selectbox(
+            "Select Model for Confusion Matrix:",
+            options=['Random Forest', 'Logistic Regression', 'KNN']
+        )
+
         cm = model_suite[selected_cm_model]['metrics']['Confusion Matrix']
-        
+
         fig_cm = px.imshow(
             cm,
             labels=dict(x="Predicted Label", y="Actual Label", color="Count"),
@@ -474,21 +1146,19 @@ with tab3:
     with col_pred_compare:
         st.markdown("##### Actual vs Predicted Churn Count Comparison")
         X_train, X_test, y_train, y_test = model_suite['data_split']
-        
+
         pred_comp_data = []
-        # Actual count
         pred_comp_data.append({'Model': 'Actual (Ground Truth)', 'Status': 'Retained (0)', 'Count': (y_test == 0).sum()})
         pred_comp_data.append({'Model': 'Actual (Ground Truth)', 'Status': 'Churned (1)', 'Count': (y_test == 1).sum()})
-        
-        # Predictions
+
         for m_name in ['KNN', 'Logistic Regression', 'Random Forest']:
             mdl = model_suite[m_name]['model']
             y_pred = mdl.predict(X_test)
             pred_comp_data.append({'Model': m_name, 'Status': 'Retained (0)', 'Count': int((y_pred == 0).sum())})
             pred_comp_data.append({'Model': m_name, 'Status': 'Churned (1)', 'Count': int((y_pred == 1).sum())})
-            
+
         pred_comp_df = pd.DataFrame(pred_comp_data)
-        
+
         fig_pred = px.bar(
             pred_comp_df,
             x='Model',
@@ -501,26 +1171,36 @@ with tab3:
         fig_pred.update_layout(template="plotly_white", height=340)
         st.plotly_chart(fig_pred, use_container_width=True)
 
+    # Conclusion
+    st.markdown("---")
+    st.markdown("#### Model Selection Conclusion")
+    st.info(
+        "Random Forest achieved the strongest overall performance among the three evaluated "
+        "classification models. Therefore, it is used as the default operational model for "
+        "customer risk scoring and retention assessment throughout this system, while KNN and "
+        "Logistic Regression are retained for academic comparison."
+    )
+
 
 # ==========================================
-# TAB 4: PREDICTOR
+# TAB 6: INDIVIDUAL CHURN PREDICTOR
 # ==========================================
-with tab4:
+with tab6:
     st.markdown("### Individual Customer Churn Predictor")
-    st.markdown("<small style='color: #666;'>Input custom customer features to simulate and predict churn risk in real-time</small>", unsafe_allow_html=True)
-    
+    st.markdown("<small style='color: #666;'>Input custom customer features to simulate and predict churn risk in real-time. This is for testing hypothetical customers who are not in the existing dataset.</small>", unsafe_allow_html=True)
+
     col_input_left, col_input_right = st.columns(2)
-    
+
     with col_input_left:
         st.markdown("#### Demographics & Plan Details")
         in_age = st.number_input("Age", min_value=18, max_value=100, value=35)
         in_gender = st.selectbox("Gender", options=raw_df['gender'].unique())
         in_sub = st.selectbox("Subscription Type", options=['Basic', 'Standard', 'Premium'])
-        
+
         fee_mapping = {'Basic': 8.99, 'Standard': 13.99, 'Premium': 17.99}
         in_monthly_fee = fee_mapping[in_sub]
         st.caption(f"Monthly Fee auto-set to: **${in_monthly_fee}**")
-        
+
         in_region = st.selectbox("Region", options=raw_df['region'].unique())
         in_payment = st.selectbox("Payment Method", options=raw_df['payment_method'].unique())
 
@@ -535,17 +1215,21 @@ with tab4:
 
     st.markdown("---")
     col_model_select, col_predict_btn = st.columns([2, 1])
-    
+
     with col_model_select:
-        selected_pred_model = st.selectbox("Choose Prediction Algorithm:", options=['Random Forest', 'Logistic Regression', 'KNN'])
-        
+        selected_pred_model = st.selectbox(
+            "Choose Prediction Algorithm:",
+            options=['Random Forest', 'Logistic Regression', 'KNN'],
+            index=0
+        )
+        st.caption("Random Forest is selected by default because it achieved the best overall evaluation performance. Other models are available for comparison.")
+
     with col_predict_btn:
-        st.write("") # vertical spacing
+        st.write("")
         st.write("")
         predict_submitted = st.button("Predict Churn Risk", use_container_width=True, type="primary")
 
     if predict_submitted:
-        # Prepare single record input DataFrame
         input_data = pd.DataFrame([{
             'age': in_age,
             'gender': in_gender,
@@ -560,17 +1244,17 @@ with tab4:
             'avg_watch_time_per_day': in_avg_daily_watch,
             'favorite_genre': in_genre
         }])
-        
+
         mdl = model_suite[selected_pred_model]['model']
         pred_label, pred_proba = mdl.predict(input_data)[0], mdl.predict_proba(input_data)[0][1]
-        
+
         churn_pct = pred_proba * 100
-        
+
         st.markdown("---")
         st.markdown("### Prediction Results")
-        
+
         res_col1, res_col2 = st.columns([1, 1])
-        
+
         with res_col1:
             if pred_label == 1:
                 st.error(f"⚠️ **HIGH RISK OF CHURN DETECTED** ({selected_pred_model})")
@@ -578,7 +1262,7 @@ with tab4:
             else:
                 st.success(f"✅ **CUSTOMER LIKELY TO STAY** ({selected_pred_model})")
                 st.markdown(f"The customer is predicted to **RETAIN** with **{100-churn_pct:.1f}%** confidence.")
-                
+
             # Risk Level Badge
             if churn_pct >= 65:
                 risk_badge = "High Risk (> 65%)"
@@ -586,11 +1270,10 @@ with tab4:
                 risk_badge = "Medium Risk (35% - 65%)"
             else:
                 risk_badge = "Low Risk (< 35%)"
-                
+
             st.info(f"**Risk Level Assessment**: {risk_badge}")
 
         with res_col2:
-            # Compact Probability Gauge with small margins and font fitting
             fig_gauge = go.Figure(go.Indicator(
                 mode="gauge+number",
                 value=churn_pct,
