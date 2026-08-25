@@ -411,29 +411,41 @@ Keep the response professional, concise, and directly actionable by retention st
 
     clean_key = str(api_key).strip()
     
-    # Try models via REST API with x-goog-api-key header (fully supports new AQ. keys and legacy AIza keys)
+    errors = []
     for model_name in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
-            headers = {
-                "x-goog-api-key": clean_key,
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}]
-            }
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception:
-            continue
+        # Try both query param ?key= and x-goog-api-key header
+        for use_param in [True, False]:
+            try:
+                if use_param:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
+                    headers = {"Content-Type": "application/json"}
+                else:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+                    headers = {
+                        "x-goog-api-key": clean_key,
+                        "Content-Type": "application/json"
+                    }
+                
+                payload = {
+                    "contents": [{"parts": [{"text": prompt}]}]
+                }
+                response = requests.post(url, headers=headers, json=payload, timeout=30)
+                if response.status_code == 200:
+                    data = response.json()
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    try:
+                        err_json = response.json().get("error", {})
+                        err_msg = err_json.get("message", response.text)
+                    except Exception:
+                        err_msg = response.text
+                    errors.append(f"{model_name} (HTTP {response.status_code}): {err_msg}")
+            except Exception as e:
+                errors.append(f"{model_name}: {str(e)}")
 
-    # Fallback to google.generativeai SDK
-    genai.configure(api_key=clean_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    response = model.generate_content(prompt)
-    return response.text
+    if errors:
+        raise Exception(errors[0])
+    raise Exception("Failed to generate response from Google Gemini API.")
 
 
 # ==========================================
