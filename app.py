@@ -506,7 +506,10 @@ selected_days = st.sidebar.slider(
 )
 
 # ---- AI Configuration ----
-gemini_api_key = st.secrets["gemini"]["api_key"]
+try:
+    gemini_api_key = st.secrets["gemini"]["api_key"]
+except (KeyError, FileNotFoundError):
+    gemini_api_key = None
 
 # Apply filters to dataset
 filtered_df = raw_df[
@@ -932,8 +935,8 @@ with tab3:
             else:
                 # --- Fallback: Rule-Based Recommendations ---
                 st.info(
-                    "🔑 Enter your **Google AI Studio API Key** in the sidebar to unlock "
-                    "AI-powered retention strategies. Showing rule-based recommendations below."
+                    "💡 **Google Gemini API Key not configured.** Showing rule-based retention recommendations below. "
+                    "To enable AI-powered retention strategies, configure your key in `.streamlit/secrets.toml`."
                 )
 
                 recommendations = generate_recommendations(customer, risk_level, churn_pct, dataset_stats)
@@ -953,8 +956,8 @@ with tab3:
                     """, unsafe_allow_html=True)
 
                 st.caption(
-                    "These are rule-based decision-support suggestions. Enter a Google AI Studio API Key "
-                    "in the sidebar to generate AI-powered personalised recommendations."
+                    "These are rule-based decision-support suggestions. Configure your Google Gemini API Key "
+                    "in `.streamlit/secrets.toml` to generate AI-powered personalized recommendations."
                 )
 
 
