@@ -8,7 +8,6 @@ import plotly.graph_objects as io
 import plotly.graph_objects as go
 from scipy.stats import gaussian_kde
 import requests
-from google import genai
 
 from model.utils import load_data, prepare_train_test_data, TARGET, NUMERICAL_FEATURES, CATEGORICAL_FEATURES
 from model.knn import train_knn_model, evaluate_knn, predict_knn
